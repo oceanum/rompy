@@ -1,0 +1,26 @@
+services:
+
+  swansrc:
+    image: oceanum/swan:latest
+    build:
+      context: ./swan-src
+      dockerfile: Dockerfile
+      args:
+        ZLIB_VERSION: 1.2.13
+        MPICH_VERSION: 3.3.1
+        HDF5_MAJOR_VERSION: 1.13
+        HDF5_MINOR_VERSION: 3
+        NETCDF_C_VERSION: 4.9.0
+        NETCDF_FORTRAN_VERSION: 4.6.0
+        SWAN_VERSION: 4141
+
+  swantest:
+    image: oceanum/swan:test
+    build:
+      context: ./swan-test
+      dockerfile: Dockerfile
+      args:
+        base_image: oceanum/swan:latest
+    depends_on:
+      - swansrc
+    command: pytest -s /tmp/tests/test_cases.py
