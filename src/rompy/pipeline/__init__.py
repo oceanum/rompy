@@ -5,10 +5,19 @@ This module provides the local pipeline backend implementation.
 """
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from rompy.backends import DockerConfig, LocalConfig
+from rompy.core.responses import (
+    PipelineFailure,
+    PipelineResult,
+    PipelineStage,
+    PipelineSuccess,
+    PostprocessFailure,
+    TimingInfo,
+)
 
 if TYPE_CHECKING:
     from rompy.backends.config import SlurmConfig
@@ -34,7 +43,7 @@ class LocalPipelineBackend:
         cleanup_on_failure: bool = False,
         validate_stages: bool = True,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> PipelineResult:
         """Execute the model pipeline locally.
 
         Args:
@@ -48,7 +57,7 @@ class LocalPipelineBackend:
             **kwargs: Additional parameters (for backward compatibility)
 
         Returns:
-            Combined results from the pipeline execution
+            PipelineResult: Success or failure result with stage tracking, timing, and nested postprocess results
 
         Raises:
             ValueError: If model_run is invalid or parameters are invalid
@@ -96,6 +105,9 @@ class LocalPipelineBackend:
 
         # Initialize parameters
         process_kwargs = process_kwargs or {}
+        start_time = datetime.now(timezone.utc)
+        stages_completed: List[PipelineStage] = []
+        cleaned_up = False
 
         backend_type = backend_config.__class__.__name__.replace("Config", "").lower()
         logger.info(f"Starting pipeline execution for run_id: {model_run.run_id}")
@@ -103,44 +115,49 @@ class LocalPipelineBackend:
             f"Pipeline configuration: backend='{backend_type}', processor='{processor.type}'"
         )
 
-        pipeline_results = {
-            "success": False,
-            "run_id": model_run.run_id,
-            "stages_completed": [],
-            "backend": backend_type,
-            "processor": processor.type,
-        }
-
         try:
             # Stage 1: Generate input files
             logger.info(f"Stage 1: Generating input files for {model_run.run_id}")
 
             try:
                 staging_dir = model_run.generate()
-                pipeline_results["staging_dir"] = (
-                    str(staging_dir) if staging_dir else None
-                )
-                pipeline_results["stages_completed"].append("generate")
+                stages_completed.append(PipelineStage.GENERATE)
                 logger.info(f"Input files generated successfully in: {staging_dir}")
             except Exception as e:
                 logger.exception(f"Failed to generate input files: {e}")
-                return {
-                    **pipeline_results,
-                    "stage": "generate",
-                    "message": f"Input file generation failed: {str(e)}",
-                    "error": str(e),
-                }
+                return PipelineFailure(
+                    success=False,
+                    run_id=model_run.run_id,
+                    backend=backend_type,
+                    processor=processor.type,
+                    stages_completed=stages_completed,
+                    failed_stage=PipelineStage.GENERATE,
+                    message=f"Input file generation failed: {str(e)}",
+                    error=str(e),
+                    timing=TimingInfo(
+                        start_time=start_time, end_time=datetime.now(timezone.utc)
+                    ),
+                    cleaned_up=cleaned_up,
+                )
 
             # Validate generation stage
             if validate_stages:
                 output_dir = Path(model_run.output_dir) / model_run.run_id
                 if not output_dir.exists():
                     logger.error(f"Output directory was not created: {output_dir}")
-                    return {
-                        **pipeline_results,
-                        "stage": "generate",
-                        "message": f"Output directory not found after generation: {output_dir}",
-                    }
+                    return PipelineFailure(
+                        success=False,
+                        run_id=model_run.run_id,
+                        backend=backend_type,
+                        processor=processor.type,
+                        stages_completed=stages_completed,
+                        failed_stage=PipelineStage.GENERATE,
+                        message=f"Output directory not found after generation: {output_dir}",
+                        timing=TimingInfo(
+                            start_time=start_time, end_time=datetime.now(timezone.utc)
+                        ),
+                        cleaned_up=cleaned_up,
+                    )
 
             # Stage 2: Run the model
             logger.info(f"Stage 2: Running model using {backend_type} backend")
@@ -150,31 +167,48 @@ class LocalPipelineBackend:
                 run_success = model_run.run(
                     backend=backend_config, workspace_dir=staging_dir
                 )
-                pipeline_results["run_success"] = run_success
 
                 if not run_success:
                     logger.error("Model run failed")
                     if cleanup_on_failure:
                         self._cleanup_outputs(model_run)
-                    return {
-                        **pipeline_results,
-                        "stage": "run",
-                        "message": "Model run failed",
-                    }
+                        cleaned_up = True
+                    return PipelineFailure(
+                        success=False,
+                        run_id=model_run.run_id,
+                        backend=backend_type,
+                        processor=processor.type,
+                        stages_completed=stages_completed,
+                        failed_stage=PipelineStage.RUN,
+                        message="Model run failed",
+                        timing=TimingInfo(
+                            start_time=start_time, end_time=datetime.now(timezone.utc)
+                        ),
+                        cleaned_up=cleaned_up,
+                    )
 
-                pipeline_results["stages_completed"].append("run")
+                stages_completed.append(PipelineStage.RUN)
                 logger.info("Model run completed successfully")
 
             except Exception as e:
                 logger.exception(f"Error during model run: {e}")
                 if cleanup_on_failure:
                     self._cleanup_outputs(model_run)
-                return {
-                    **pipeline_results,
-                    "stage": "run",
-                    "message": f"Model run error: {str(e)}",
-                    "error": str(e),
-                }
+                    cleaned_up = True
+                return PipelineFailure(
+                    success=False,
+                    run_id=model_run.run_id,
+                    backend=backend_type,
+                    processor=processor.type,
+                    stages_completed=stages_completed,
+                    failed_stage=PipelineStage.RUN,
+                    message=f"Model run error: {str(e)}",
+                    error=str(e),
+                    timing=TimingInfo(
+                        start_time=start_time, end_time=datetime.now(timezone.utc)
+                    ),
+                    cleaned_up=cleaned_up,
+                )
 
             # Stage 3: Postprocess outputs
             logger.info(f"Stage 3: Postprocessing with {processor.type}")
@@ -183,47 +217,88 @@ class LocalPipelineBackend:
                 postprocess_results = model_run.postprocess(
                     processor=processor, **process_kwargs
                 )
-                pipeline_results["postprocess_results"] = postprocess_results
-                pipeline_results["stages_completed"].append("postprocess")
+                stages_completed.append(PipelineStage.POSTPROCESS)
 
                 # Check if postprocessing was successful
-                if isinstance(
-                    postprocess_results, dict
-                ) and not postprocess_results.get("success", True):
+                if isinstance(postprocess_results, PostprocessFailure):
                     logger.warning(
-                        "Postprocessing reported failure but pipeline will continue"
+                        "Postprocessing failed but pipeline will mark as complete with failure"
+                    )
+                    # Return PipelineFailure with nested PostprocessFailure
+                    return PipelineFailure(
+                        success=False,
+                        run_id=model_run.run_id,
+                        backend=backend_type,
+                        processor=processor.type,
+                        stages_completed=stages_completed,
+                        failed_stage=PipelineStage.POSTPROCESS,
+                        message=f"Postprocessing failed: {postprocess_results.message}",
+                        error=postprocess_results.error,
+                        postprocess_results=postprocess_results,
+                        timing=TimingInfo(
+                            start_time=start_time, end_time=datetime.now(timezone.utc)
+                        ),
+                        cleaned_up=cleaned_up,
                     )
 
                 logger.info("Postprocessing completed")
 
             except Exception as e:
                 logger.exception(f"Error during postprocessing: {e}")
-                return {
-                    **pipeline_results,
-                    "stage": "postprocess",
-                    "message": f"Postprocessing error: {str(e)}",
-                    "error": str(e),
-                }
+                return PipelineFailure(
+                    success=False,
+                    run_id=model_run.run_id,
+                    backend=backend_type,
+                    processor=processor.type,
+                    stages_completed=stages_completed,
+                    failed_stage=PipelineStage.POSTPROCESS,
+                    message=f"Postprocessing error: {str(e)}",
+                    error=str(e),
+                    timing=TimingInfo(
+                        start_time=start_time, end_time=datetime.now(timezone.utc)
+                    ),
+                    cleaned_up=cleaned_up,
+                )
 
             # Pipeline completed successfully
-            pipeline_results["success"] = True
-            pipeline_results["message"] = "Pipeline completed successfully"
-
             logger.info(
                 f"Pipeline execution completed successfully for run_id: {model_run.run_id}"
             )
-            return pipeline_results
+            return PipelineSuccess(
+                success=True,
+                run_id=model_run.run_id,
+                backend=backend_type,
+                processor=processor.type,
+                stages_completed=stages_completed,
+                postprocess_results=postprocess_results,
+                message="Pipeline completed successfully",
+                timing=TimingInfo(
+                    start_time=start_time, end_time=datetime.now(timezone.utc)
+                ),
+                cleaned_up=cleaned_up,
+            )
 
         except Exception as e:
             logger.exception(f"Unexpected error in pipeline execution: {e}")
             if cleanup_on_failure:
                 self._cleanup_outputs(model_run)
-            return {
-                **pipeline_results,
-                "stage": "pipeline",
-                "message": f"Pipeline error: {str(e)}",
-                "error": str(e),
-            }
+                cleaned_up = True
+            return PipelineFailure(
+                success=False,
+                run_id=model_run.run_id,
+                backend=backend_type,
+                processor=processor.type,
+                stages_completed=stages_completed,
+                failed_stage=stages_completed[-1]
+                if stages_completed
+                else PipelineStage.GENERATE,
+                message=f"Pipeline error: {str(e)}",
+                error=str(e),
+                timing=TimingInfo(
+                    start_time=start_time, end_time=datetime.now(timezone.utc)
+                ),
+                cleaned_up=cleaned_up,
+            )
 
     def _cleanup_outputs(self, model_run) -> None:
         """Clean up output files on pipeline failure.
