@@ -195,15 +195,15 @@
 **What**: Add new method that returns `ModelRunResult` alongside existing `run() -> bool`
 
 **Acceptance**:
-- [ ] Import `ModelRunResult`, `TimingInfo` from `rompy.core.responses`
-- [ ] Define `run_detailed()` method with same signature as `run()`
-- [ ] Capture `start_time` at method start
-- [ ] Call existing `run()` method internally
-- [ ] Wrap result in `ModelRunResult` with timing and metadata
-- [ ] Handle exceptions with `ModelRunResult(success=False, error=...)`
-- [ ] Include comprehensive docstring explaining new method vs old
-- [ ] Existing `run()` method unchanged (backward compat)
-- [ ] No import errors
+- [x] Import `ModelRunResult`, `TimingInfo` from `rompy.core.responses`
+- [x] Define `run_detailed()` method with same signature as `run()`
+- [x] Capture `start_time` at method start
+- [x] Call existing `run()` method internally
+- [x] Wrap result in `ModelRunResult` with timing and metadata
+- [x] Handle exceptions with `ModelRunResult(success=False, error=...)`
+- [x] Include comprehensive docstring explaining new method vs old
+- [x] Existing `run()` method unchanged (backward compat)
+- [x] No import errors
 
 **Dependencies**: Task 1.1
 
@@ -217,13 +217,13 @@
 **What**: Update model run test assertions to work with new return types
 
 **Acceptance**:
-- [ ] Import result types from `rompy.core.responses`
-- [ ] Update `postprocess()` tests to use `PostprocessResult`
-- [ ] Update `pipeline()` tests to use `PipelineResult`
-- [ ] Add tests for `run_detailed()` method
-- [ ] Replace dict assertions with object assertions
-- [ ] Verify timing information
-- [ ] All model tests pass
+- [x] Import result types from `rompy.core.responses`
+- [x] Update `postprocess()` tests to use `PostprocessResult`
+- [x] Update `pipeline()` tests to use `PipelineResult`
+- [x] Add tests for `run_detailed()` method
+- [x] Replace dict assertions with object assertions
+- [x] Verify timing information
+- [x] All model tests pass
 
 **Dependencies**: Task 4.1, Task 4.2, Task 4.3
 

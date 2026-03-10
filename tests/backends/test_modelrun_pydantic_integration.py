@@ -12,9 +12,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rompy.backends import DockerConfig, LocalConfig
-from tests.test_helpers import DemoConfig
+from rompy.core.responses import ModelRunResult
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
+from tests.test_helpers import DemoConfig
 
 
 @pytest.fixture
@@ -247,3 +248,127 @@ class TestModelRunPydanticIntegration:
 
         assert isinstance(local_config, BackendConfig)
         assert isinstance(docker_config, BackendConfig)
+
+    def test_run_detailed_success(self, model_run, tmp_path):
+        """Test ModelRun.run_detailed() returns ModelRunResult on success."""
+        # Create output directory
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="echo 'test output' > test_file.txt",
+            working_dir=output_dir,
+            timeout=3600,
+        )
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+            result = model_run.run_detailed(backend=config)
+
+        # Verify result type
+        assert isinstance(result, ModelRunResult)
+        assert result.success is True
+        assert result.run_id == model_run.run_id
+        assert result.backend_used == "Local"
+
+        # Verify timing information
+        assert result.timing is not None
+        assert result.timing.duration_seconds >= 0
+
+        # Verify output directory
+        assert result.output_dir is not None
+
+        # Verify metadata
+        assert result.metadata is not None
+        assert "backend_config" in result.metadata
+
+    def test_run_detailed_failure(self, model_run, tmp_path):
+        """Test ModelRun.run_detailed() returns failure result on error."""
+        config = LocalConfig(
+            command="exit 1",  # Command that fails
+            working_dir=tmp_path,
+        )
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(tmp_path)):
+            with patch(
+                "rompy.run.LocalRunBackend.run",
+                return_value=False,  # Simulate failure
+            ):
+                result = model_run.run_detailed(backend=config)
+
+        # Verify result type
+        assert isinstance(result, ModelRunResult)
+        assert result.success is False
+        assert result.run_id == model_run.run_id
+        assert result.message == "Model execution failed"
+
+        # Verify timing even on failure
+        assert result.timing is not None
+        assert result.timing.duration_seconds >= 0
+
+    def test_run_detailed_invalid_backend(self, model_run):
+        """Test ModelRun.run_detailed() handles invalid backend type."""
+        # Pass invalid backend type (string instead of config)
+        result = model_run.run_detailed(backend="invalid")
+
+        # Should return failure result, not raise exception
+        assert isinstance(result, ModelRunResult)
+        assert result.success is False
+        assert "BaseBackendConfig" in result.error
+        assert result.timing is not None
+
+    def test_run_detailed_exception_handling(self, model_run):
+        """Test ModelRun.run_detailed() handles exceptions gracefully."""
+        config = LocalConfig(command="echo test")
+
+        with patch(
+            "rompy.model.ModelRun.run",
+            side_effect=RuntimeError("Simulated backend error"),
+        ):
+            result = model_run.run_detailed(backend=config)
+
+        # Should return failure result with error details
+        assert isinstance(result, ModelRunResult)
+        assert result.success is False
+        assert "Simulated backend error" in result.error
+        assert "exception" in result.message.lower()
+        assert result.timing is not None
+
+    def test_run_detailed_timing_accuracy(self, model_run, tmp_path):
+        """Test that run_detailed() captures accurate timing information."""
+        import time
+
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="sleep 0.1",  # Small delay to measure
+            working_dir=output_dir,
+        )
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+            result = model_run.run_detailed(backend=config)
+
+        # Verify timing was captured
+        assert result.timing.duration_seconds >= 0.05  # At least some time passed
+        assert result.timing.start_time < result.timing.end_time
+
+    def test_run_detailed_metadata_includes_config(self, model_run, tmp_path):
+        """Test that run_detailed() includes backend config in metadata."""
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="echo test",
+            working_dir=output_dir,
+            timeout=7200,
+        )
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+            result = model_run.run_detailed(backend=config)
+
+        # Verify metadata contains backend config
+        assert result.metadata is not None
+        assert "backend_config" in result.metadata
+        backend_config_dict = result.metadata["backend_config"]
+        assert backend_config_dict["command"] == "echo test"
+        assert backend_config_dict["timeout"] == 7200
