@@ -20,6 +20,11 @@ from rompy.postprocess.config import (
     _load_processor_config,
     validate_postprocessor_config,
 )
+from rompy.core.responses import (
+    PostprocessResult,
+    PostprocessSuccess,
+    PostprocessFailure,
+)
 
 
 class TestBasePostprocessorConfig:
@@ -213,7 +218,8 @@ class TestModelRunIntegration:
         config = NoopPostprocessorConfig(validate_outputs=False)
         # Should not raise TypeError
         result = model.postprocess(config)
-        assert isinstance(result, dict)
+        # Result is now PostprocessResult type, not dict
+        assert isinstance(result, (PostprocessSuccess, PostprocessFailure))
 
     def test_postprocess_rejects_string(self):
         """Test that ModelRun.postprocess rejects string processor names."""
