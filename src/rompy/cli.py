@@ -19,6 +19,12 @@ import yaml
 
 import rompy
 from rompy.backends import DockerConfig, LocalConfig, SlurmConfig
+from rompy.core.responses import (
+    PipelineFailure,
+    PipelineSuccess,
+    PostprocessFailure,
+    PostprocessSuccess,
+)
 from rompy.logging import LogFormat, LoggingConfig, LogLevel, get_logger
 from rompy.model import PIPELINE_BACKENDS, POSTPROCESSORS, RUN_BACKENDS, ModelRun
 from rompy.templating import render_templates
@@ -543,18 +549,25 @@ def pipeline(
         elapsed = datetime.now() - start_time
 
         # Report results
-        success = results.get("success", False)
-        stages = results.get("stages_completed", [])
+        success = results.success
+        stages = results.stages_completed
 
         logger.info(f"Pipeline completed in {elapsed.total_seconds():.2f}s")
-        logger.info(f"Stages completed: {', '.join(stages)}")
+        # Convert PipelineStage enums to their string values for display
+        stage_names = [stage.value for stage in stages]
+        logger.info(f"Stages completed: {', '.join(stage_names)}")
 
         if success:
             logger.info("✅ Pipeline completed successfully")
+            # Display timing information if available
+            if hasattr(results, "timing") and results.timing:
+                logger.info(
+                    f"Pipeline duration: {results.timing.duration_seconds:.2f}s"
+                )
         else:
-            logger.error(
-                f"❌ Pipeline failed: {results.get('message', 'Unknown error')}"
-            )
+            # results is PipelineFailure, has 'error' attribute
+            error_msg = results.error if hasattr(results, "error") else "Unknown error"
+            logger.error(f"❌ Pipeline failed: {error_msg}")
             sys.exit(1)
 
     except Exception as e:
@@ -684,8 +697,24 @@ def postprocess(
         )
         elapsed = datetime.now() - start_time
 
-        logger.info(f"✅ Postprocessing completed in {elapsed.total_seconds():.2f}s")
-        logger.info(f"Results: {results}")
+        # Report results
+        if results.success:
+            logger.info(
+                f"✅ Postprocessing completed successfully in {elapsed.total_seconds():.2f}s"
+            )
+            if hasattr(results, "output_files") and results.output_files:
+                logger.info(
+                    f"Output files: {len(results.output_files)} files generated"
+                )
+            if hasattr(results, "timing") and results.timing:
+                logger.info(
+                    f"Processing duration: {results.timing.duration_seconds:.2f}s"
+                )
+        else:
+            # results is PostprocessFailure
+            error_msg = results.error if hasattr(results, "error") else "Unknown error"
+            logger.error(f"❌ Postprocessing failed: {error_msg}")
+            sys.exit(1)
 
     except Exception as e:
         logger.error(f"❌ Postprocessing failed: {e}")

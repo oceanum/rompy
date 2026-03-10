@@ -239,16 +239,16 @@
 **What**: Replace dict access with typed object attribute access in pipeline CLI commands
 
 **Acceptance**:
-- [ ] Import `PipelineSuccess`, `PipelineFailure` from `rompy.core.responses`
-- [ ] Replace `results.get("success")` with `results.success`
-- [ ] Replace `results.get("stages_completed")` with `results.stages_completed`
-- [ ] Replace `results.get("message")` with `results.message` or `results.error`
-- [ ] Use `stage.value` for enum logging
-- [ ] Use `results.timing.duration_seconds` for timing display
-- [ ] Handle nested `postprocess_results` properly
-- [ ] Use `if results.success:` for type narrowing
-- [ ] Update all logging statements
-- [ ] CLI commands work correctly with new types
+- [x] Import `PipelineSuccess`, `PipelineFailure` from `rompy.core.responses`
+- [x] Replace `results.get("success")` with `results.success`
+- [x] Replace `results.get("stages_completed")` with `results.stages_completed`
+- [x] Replace `results.get("message")` with `results.message` or `results.error`
+- [x] Use `stage.value` for enum logging
+- [x] Use `results.timing.duration_seconds` for timing display
+- [x] Handle nested `postprocess_results` properly
+- [x] Use `if results.success:` for type narrowing
+- [x] Update all logging statements
+- [x] CLI commands work correctly with new types
 
 **Dependencies**: Task 4.2
 
@@ -262,10 +262,10 @@
 **What**: Replace dict access for postprocess results (if directly called from CLI)
 
 **Acceptance**:
-- [ ] Import `PostprocessSuccess`, `PostprocessFailure` from `rompy.core.responses`
-- [ ] Replace dict access with attribute access
-- [ ] Update logging statements
-- [ ] CLI works correctly
+- [x] Import `PostprocessSuccess`, `PostprocessFailure` from `rompy.core.responses`
+- [x] Replace dict access with attribute access
+- [x] Update logging statements
+- [x] CLI works correctly
 
 **Dependencies**: Task 4.1
 
