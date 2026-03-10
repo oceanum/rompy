@@ -19,6 +19,16 @@ from rompy.pipeline import LocalPipelineBackend
 from rompy.postprocess import NoopPostprocessor
 from rompy.postprocess.config import NoopPostprocessorConfig
 from rompy.run import LocalRunBackend
+from rompy.core.responses import (
+    Artifact,
+    ArtifactType,
+    PipelineFailure,
+    PipelineStage,
+    PipelineSuccess,
+    PostprocessFailure,
+    PostprocessSuccess,
+    TimingInfo,
+)
 
 
 @pytest.fixture
@@ -272,10 +282,22 @@ class TestEnhancedNoopPostprocessor:
 
         result = processor.process(model_run, validate_outputs=True)
 
-        assert result["success"] is True
-        assert result["run_id"] == model_run.run_id
-        assert result["validated"] is True
-        assert "validation only" in result["message"]
+        # Verify result is PostprocessSuccess type
+        assert isinstance(result, PostprocessSuccess)
+        assert result.success is True
+        assert result.run_id == model_run.run_id
+        assert result.validated is True
+        assert "validation only" in result.message
+
+        # Verify artifacts were tracked
+        assert len(result.artifacts) == 2
+        assert all(isinstance(artifact, Artifact) for artifact in result.artifacts)
+        artifact_names = {artifact.path.name for artifact in result.artifacts}
+        assert artifact_names == {"output1.txt", "output2.txt"}
+
+        # Verify timing information is present
+        assert result.timing is not None
+        assert result.timing.duration_seconds >= 0
 
     def test_process_with_validation_missing_dir(self, model_run, tmp_path):
         """Test processing with validation when output directory is missing."""
@@ -284,9 +306,15 @@ class TestEnhancedNoopPostprocessor:
         # Don't create output directory
         result = processor.process(model_run, validate_outputs=True)
 
-        assert result["success"] is False
-        assert "not found" in result["message"]
-        assert result["run_id"] == model_run.run_id
+        # Verify result is PostprocessFailure type
+        assert isinstance(result, PostprocessFailure)
+        assert result.success is False
+        assert "not found" in result.message
+        assert result.run_id == model_run.run_id
+
+        # Verify timing information is present even on failure
+        assert result.timing is not None
+        assert result.timing.duration_seconds >= 0
 
     def test_process_without_validation(self, model_run, tmp_path):
         """Test processing without output validation."""
@@ -294,9 +322,15 @@ class TestEnhancedNoopPostprocessor:
 
         result = processor.process(model_run, validate_outputs=False)
 
-        assert result["success"] is True
-        assert result["run_id"] == model_run.run_id
-        assert result["validated"] is False
+        # Verify result is PostprocessSuccess type (no validation means success)
+        assert isinstance(result, PostprocessSuccess)
+        assert result.success is True
+        assert result.run_id == model_run.run_id
+        assert result.validated is False
+
+        # Verify timing information is present
+        assert result.timing is not None
+        assert result.timing.duration_seconds >= 0
 
     def test_process_with_custom_output_dir(self, model_run, tmp_path):
         """Test processing with custom output directory."""
@@ -310,8 +344,15 @@ class TestEnhancedNoopPostprocessor:
             model_run, validate_outputs=True, output_dir=str(custom_dir)
         )
 
-        assert result["success"] is True
-        assert result["output_dir"] == str(custom_dir)
+        # Verify result is PostprocessSuccess type
+        assert isinstance(result, PostprocessSuccess)
+        assert result.success is True
+        assert result.output_dir == str(custom_dir)
+
+        # Verify artifacts from custom directory were tracked
+        assert len(result.artifacts) == 1
+        assert result.artifacts[0].path.name == "custom_file.txt"
+        assert result.artifacts[0].type == ArtifactType.TEXT
 
     def test_process_exception_handling(self, model_run):
         """Test exception handling in process method."""
@@ -323,9 +364,15 @@ class TestEnhancedNoopPostprocessor:
 
             result = processor.process(model_run)
 
-            assert result["success"] is False
-            assert "error" in result
-            assert "File system error" in result["message"]
+            # Verify result is PostprocessFailure type
+            assert isinstance(result, PostprocessFailure)
+            assert result.success is False
+            assert result.error is not None
+            assert "File system error" in result.message
+
+            # Verify timing information is present even on exception
+            assert result.timing is not None
+            assert result.timing.duration_seconds >= 0
 
 
 class TestEnhancedLocalPipelineBackend:
@@ -377,10 +424,11 @@ class TestEnhancedLocalPipelineBackend:
                 model_run, backend_config=backend_config, processor=processor_config
             )
 
-        assert result["success"] is False
-        assert result["stage"] == "generate"
-        assert "Generate failed" in result["message"]
-        assert "generate" not in result["stages_completed"]
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.failed_stage == PipelineStage.GENERATE
+        assert "Generate failed" in result.message
+        assert PipelineStage.GENERATE not in result.stages_completed
 
     def test_execute_run_failure(
         self, model_run, tmp_path, backend_config, processor_config
@@ -397,10 +445,11 @@ class TestEnhancedLocalPipelineBackend:
                     model_run, backend_config=backend_config, processor=processor_config
                 )
 
-        assert result["success"] is False
-        assert result["stage"] == "run"
-        assert "generate" in result["stages_completed"]
-        assert "run" not in result["stages_completed"]
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.failed_stage == PipelineStage.RUN
+        assert PipelineStage.GENERATE in result.stages_completed
+        assert PipelineStage.RUN not in result.stages_completed
 
     def test_execute_run_exception(
         self, model_run, tmp_path, backend_config, processor_config
@@ -417,9 +466,10 @@ class TestEnhancedLocalPipelineBackend:
                     model_run, backend_config=backend_config, processor=processor_config
                 )
 
-        assert result["success"] is False
-        assert result["stage"] == "run"
-        assert "Run failed" in result["message"]
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.failed_stage == PipelineStage.RUN
+        assert "Run failed" in result.message
 
     def test_execute_postprocess_failure(
         self, model_run, tmp_path, backend_config, processor_config
@@ -442,11 +492,12 @@ class TestEnhancedLocalPipelineBackend:
                         processor=processor_config,
                     )
 
-        assert result["success"] is False
-        assert result["stage"] == "postprocess"
-        assert "generate" in result["stages_completed"]
-        assert "run" in result["stages_completed"]
-        assert "postprocess" not in result["stages_completed"]
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.failed_stage == PipelineStage.POSTPROCESS
+        assert PipelineStage.GENERATE in result.stages_completed
+        assert PipelineStage.RUN in result.stages_completed
+        assert PipelineStage.POSTPROCESS not in result.stages_completed
 
     def test_execute_success_complete(self, model_run, tmp_path, processor_config):
         """Test successful complete pipeline execution."""
@@ -455,7 +506,12 @@ class TestEnhancedLocalPipelineBackend:
         output_dir = tmp_path / model_run.run_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        mock_postprocess_result = {"success": True, "message": "Postprocessing done"}
+        # Create a PostprocessSuccess object for the mock
+        mock_postprocess_result = PostprocessSuccess(
+            message="Postprocessing done",
+            artifacts=[],
+            timing=TimingInfo.create(),
+        )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             with patch("rompy.model.ModelRun.run", return_value=True):
@@ -471,13 +527,14 @@ class TestEnhancedLocalPipelineBackend:
                         process_kwargs={"param2": "value2"},
                     )
 
-        assert result["success"] is True
-        assert result["run_success"] is True
-        assert result["postprocess_results"] == mock_postprocess_result
-        assert "generate" in result["stages_completed"]
-        assert "run" in result["stages_completed"]
-        assert "postprocess" in result["stages_completed"]
-        assert result["message"] == "Pipeline completed successfully"
+        assert isinstance(result, PipelineSuccess)
+        assert result.success is True
+        assert result.run_success is True
+        assert result.postprocess_results == mock_postprocess_result
+        assert PipelineStage.GENERATE in result.stages_completed
+        assert PipelineStage.RUN in result.stages_completed
+        assert PipelineStage.POSTPROCESS in result.stages_completed
+        assert result.message == "Pipeline completed successfully"
 
     def test_execute_with_validation_failure(
         self, model_run, tmp_path, backend_config, processor_config
@@ -496,9 +553,10 @@ class TestEnhancedLocalPipelineBackend:
                 validate_stages=True,
             )
 
-        assert result["success"] is False
-        assert result["stage"] == "generate"
-        assert "not found after generation" in result["message"]
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.failed_stage == PipelineStage.GENERATE
+        assert "not found after generation" in result.message
 
     def test_execute_with_cleanup_on_failure(
         self, model_run, tmp_path, backend_config, processor_config
@@ -520,7 +578,9 @@ class TestEnhancedLocalPipelineBackend:
                     cleanup_on_failure=True,
                 )
 
-        assert result["success"] is False
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.cleaned_up is True
         # Directory should be cleaned up
         assert not output_dir.exists()
 
@@ -560,11 +620,11 @@ class TestEnhancedLocalPipelineBackend:
         output_dir = tmp_path / model_run.run_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Postprocessor returns success=False but doesn't raise exception
-        mock_postprocess_result = {
-            "success": False,
-            "message": "Postprocessing had issues",
-        }
+        # Postprocessor returns PostprocessFailure but doesn't raise exception
+        mock_postprocess_result = PostprocessFailure(
+            message="Postprocessing had issues",
+            timing=TimingInfo.create(),
+        )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             with patch("rompy.model.ModelRun.run", return_value=True):
@@ -579,6 +639,7 @@ class TestEnhancedLocalPipelineBackend:
                     )
 
         # Pipeline should still succeed
-        assert result["success"] is True
-        assert result["postprocess_results"] == mock_postprocess_result
-        assert "postprocess" in result["stages_completed"]
+        assert isinstance(result, PipelineSuccess)
+        assert result.success is True
+        assert result.postprocess_results == mock_postprocess_result
+        assert PipelineStage.POSTPROCESS in result.stages_completed

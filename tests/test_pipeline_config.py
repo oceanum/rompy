@@ -18,6 +18,7 @@ import yaml
 
 from rompy.backends import LocalConfig
 from rompy.cli import load_config
+from rompy.core.responses import PostprocessSuccess, TimingInfo
 from rompy.core.time import TimeRange
 from rompy.core.yaml_loader import load_yaml_with_includes
 from rompy.model import ModelRun
@@ -371,7 +372,11 @@ class TestBackwardCompatibilityWarning:
                 with patch("rompy.model.ModelRun.run", return_value=True):
                     with patch(
                         "rompy.model.ModelRun.postprocess",
-                        return_value={"success": True},
+                        return_value=PostprocessSuccess(
+                            message="Postprocessing done",
+                            artifacts=[],
+                            timing=TimingInfo.create(),
+                        ),
                     ):
                         result = backend.execute(
                             model_run,
@@ -386,4 +391,4 @@ class TestBackwardCompatibilityWarning:
         )
 
         # Should still work with backward compatibility
-        assert result["success"] is True
+        assert result.success is True
