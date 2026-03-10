@@ -18,6 +18,12 @@ from pydantic import Field
 from rompy.backends import BackendConfig
 from rompy.backends.config import BaseBackendConfig
 from rompy.core.config import BaseConfig
+from rompy.core.responses import (
+    PipelineResult,
+    PostprocessFailure,
+    PostprocessResult,
+    TimingInfo,
+)
 from rompy.core.time import TimeRange
 from rompy.core.types import RompyBaseModel
 from rompy.logging import get_logger
@@ -363,7 +369,7 @@ class ModelRun(RompyBaseModel):
         # Pass the config object and workspace_dir to the backend
         return backend_instance.run(self, config=backend, workspace_dir=workspace_dir)
 
-    def postprocess(self, processor, **kwargs) -> Dict[str, Any]:
+    def postprocess(self, processor, **kwargs) -> PostprocessResult:
         """
         Postprocess the model outputs using the specified processor configuration.
 
@@ -376,35 +382,51 @@ class ModelRun(RompyBaseModel):
             **kwargs: Additional processor-specific parameters (override config values)
 
         Returns:
-            Dictionary with results from the postprocessing
+            PostprocessResult: Typed result object with success status, timing,
+                and artifacts (for success) or error details (for failure).
 
         Raises:
             TypeError: If processor is not a BasePostprocessorConfig instance
         """
         from rompy.postprocess.config import BasePostprocessorConfig
 
-        if not isinstance(processor, BasePostprocessorConfig):
-            raise TypeError(
-                f"processor must be a BasePostprocessorConfig instance, "
-                f"got {type(processor).__name__}"
+        start_time = datetime.now(timezone.utc)
+
+        try:
+            if not isinstance(processor, BasePostprocessorConfig):
+                raise TypeError(
+                    f"processor must be a BasePostprocessorConfig instance, "
+                    f"got {type(processor).__name__}"
+                )
+
+            # Get processor class from config
+            processor_class = processor.get_postprocessor_class()
+            processor_instance = processor_class()
+
+            # Extract processor-specific fields (exclude common base fields)
+            base_fields = {"timeout", "env_vars", "working_dir", "type"}
+            processor_fields = {
+                k: v for k, v in processor.model_dump().items() if k not in base_fields
+            }
+
+            # Merge with any user-provided kwargs (kwargs take precedence)
+            processor_fields.update(kwargs)
+
+            # Processor returns PostprocessResult directly
+            return processor_instance.process(self, **processor_fields)
+
+        except Exception as e:
+            # Wrap any top-level exceptions in PostprocessFailure
+            return PostprocessFailure(
+                message=f"Postprocessing failed: {str(e)}",
+                error=str(e),
+                timing=TimingInfo(
+                    start_time=start_time,
+                    end_time=datetime.now(timezone.utc),
+                ),
             )
 
-        # Get processor class from config
-        processor_class = processor.get_postprocessor_class()
-        processor_instance = processor_class()
-
-        # Extract processor-specific fields (exclude common base fields)
-        base_fields = {"timeout", "env_vars", "working_dir", "type"}
-        processor_fields = {
-            k: v for k, v in processor.model_dump().items() if k not in base_fields
-        }
-
-        # Merge with any user-provided kwargs (kwargs take precedence)
-        processor_fields.update(kwargs)
-
-        return processor_instance.process(self, **processor_fields)
-
-    def pipeline(self, pipeline_backend: str = "local", **kwargs) -> Dict[str, Any]:
+    def pipeline(self, pipeline_backend: str = "local", **kwargs) -> PipelineResult:
         """
         Run the complete model pipeline (generate, run, postprocess) using the specified pipeline backend.
 
@@ -424,7 +446,8 @@ class ModelRun(RompyBaseModel):
                 - process_kwargs: Additional parameters for postprocessing
 
         Returns:
-            Dictionary with results from the pipeline execution
+            PipelineResult: Typed result object with success status, timing, stage tracking,
+                and nested postprocess results.
 
         Raises:
             ValueError: If the specified pipeline backend is not available
@@ -438,6 +461,7 @@ class ModelRun(RompyBaseModel):
             )
 
         # Create an instance and execute the pipeline
+        # Backend returns PipelineResult directly
         backend_class = PIPELINE_BACKENDS[pipeline_backend]
         backend_instance = backend_class()
         return backend_instance.execute(self, **kwargs)
