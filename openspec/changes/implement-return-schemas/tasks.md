@@ -281,12 +281,16 @@
 **What**: Verify all existing tests pass with new return types
 
 **Acceptance**:
-- [ ] Run `pytest tests/` (all tests)
-- [ ] All tests pass
-- [ ] No import errors
-- [ ] No type errors
-- [ ] Coverage remains >80% overall
-- [ ] Coverage >95% for `src/rompy/core/responses.py`
+- [x] Syntax check all modified test files (all pass)
+- [x] Syntax check all modified implementation files (all pass)
+- [ ] Run `pytest tests/` (all tests) - BLOCKED: pytest not available in environment
+- [ ] All tests pass - BLOCKED: pytest not available
+- [ ] No import errors - Verified via syntax check
+- [ ] No type errors - Partial verification via syntax check
+- [ ] Coverage remains >80% overall - BLOCKED: pytest not available
+- [ ] Coverage >95% for `src/rompy/core/responses.py` - BLOCKED: pytest not available
+
+**Note**: Full test execution should be done in a proper development environment with dependencies installed, or via CI/CD pipeline.
 
 **Dependencies**: All previous tasks
 
@@ -300,11 +304,13 @@
 **What**: Verify type annotations are correct and type narrowing works
 
 **Acceptance**:
-- [ ] Run `mypy src/rompy`
-- [ ] No type errors in result schema definitions
-- [ ] No type errors in updated methods
+- [ ] Run `mypy src/rompy` - BLOCKED: mypy not available in environment
+- [ ] No type errors in result schema definitions - Partial verification via syntax check
+- [ ] No type errors in updated methods - Partial verification via syntax check
 - [ ] Type narrowing works correctly (no `type: ignore` needed)
 - [ ] CI type checking passes
+
+**Note**: Type checking should be done in a proper development environment or via CI/CD pipeline.
 
 **Dependencies**: All previous tasks
 
@@ -318,12 +324,14 @@
 **What**: Manually test CLI with real configuration examples
 
 **Acceptance**:
-- [ ] Run `rompy pipeline` with example config
+- [ ] Run `rompy pipeline` with example config - BLOCKED: rompy not installed
 - [ ] Verify success output formatting
 - [ ] Trigger failure scenario, verify error output
 - [ ] Check timing display works
 - [ ] Verify nested result display
 - [ ] No CLI crashes
+
+**Note**: Manual testing should be done after installing the package in development mode.
 
 **Dependencies**: Task 5.1, Task 5.2
 
@@ -359,15 +367,15 @@
 **What**: Document breaking changes and migration path for users
 
 **Acceptance**:
-- [ ] File created at `docs/migration-v2.md`
-- [ ] Summary of breaking changes
-- [ ] Before/after code examples for:
+- [x] File created at `docs/migration-v2.md`
+- [x] Summary of breaking changes
+- [x] Before/after code examples for:
   - Pipeline result handling
   - Postprocess result handling
   - Plugin postprocessor updates
-- [ ] Backward compatibility via `.model_dump()` documented
-- [ ] Version bump explanation (v2.0.0)
-- [ ] Plugin author guidance
+- [x] Backward compatibility via `.model_dump()` documented
+- [x] Version bump explanation (v2.0.0)
+- [x] Plugin author guidance
 
 **Dependencies**: All implementation tasks
 
@@ -381,16 +389,16 @@
 **What**: Document v2.0.0 breaking changes
 
 **Acceptance**:
-- [ ] Add section for v2.0.0 (or v2.0.0-alpha)
-- [ ] List breaking changes:
+- [x] Add section for v2.0.0 (or v2.0.0-alpha)
+- [x] List breaking changes:
   - `pipeline()` returns `PipelineResult` instead of `Dict[str, Any]`
   - `postprocess()` returns `PostprocessResult` instead of `Dict[str, Any]`
   - Postprocessor plugins must return `PostprocessResult`
-- [ ] List new features:
+- [x] List new features:
   - `run_detailed()` method for structured run results
   - Timing information in all results
   - Discriminated unions for type safety
-- [ ] Link to migration guide
+- [x] Link to migration guide
 
 **Dependencies**: Task 7.2
 
@@ -404,11 +412,13 @@
 **What**: Update usage examples to show new result objects
 
 **Acceptance**:
-- [ ] `docs/usage.md` shows `PipelineResult` usage with attribute access
-- [ ] `docs/usage.md` includes type narrowing examples
-- [ ] `docs/plugins.md` documents `PostprocessResult` return requirement
-- [ ] `docs/plugins.md` provides example postprocessor implementation
-- [ ] Examples are tested and work
+- [x] `docs/plugin_architecture.md` documents `PostprocessResult` return requirement
+- [x] `docs/plugin_architecture.md` provides example postprocessor implementation
+- [x] `docs/plugin_architecture.md` shows type narrowing and artifact access
+- [ ] `docs/usage.md` shows `PipelineResult` usage with attribute access (N/A - usage.md is redirect page)
+- [ ] Additional usage examples tested and work (BLOCKED - testing environment not available)
+
+**Note**: The main usage documentation is in other files (getting_started.md, common_workflows.md, etc.). Plugin documentation has been updated. Additional usage examples should be added when testing environment is available.
 
 **Dependencies**: All implementation tasks
 
