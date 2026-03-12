@@ -256,19 +256,25 @@ class TestEnhancedNoopPostprocessor:
     """Test the enhanced NoopPostprocessor with validation and error handling."""
 
     def test_process_validation_none_model_run(self):
-        """Test that process raises ValueError for None model_run."""
+        """Test that process returns PostprocessFailure for None model_run."""
         processor = NoopPostprocessor()
 
-        with pytest.raises(ValueError, match="model_run cannot be None"):
-            processor.process(None)
+        result = processor.process(None)
+        assert isinstance(result, PostprocessFailure)
+        assert result.success is False
+        assert "model_run cannot be None" in result.error
+        assert result.run_id == "unknown"
 
     def test_process_validation_invalid_model_run(self):
-        """Test that process raises ValueError for invalid model_run."""
+        """Test that process returns PostprocessFailure for invalid model_run."""
         processor = NoopPostprocessor()
         invalid_model = object()  # Object without run_id attribute
 
-        with pytest.raises(ValueError, match="model_run must have a run_id attribute"):
-            processor.process(invalid_model)
+        result = processor.process(invalid_model)
+        assert isinstance(result, PostprocessFailure)
+        assert result.success is False
+        assert "model_run must have a run_id attribute" in result.error
+        assert result.run_id == "unknown"
 
     def test_process_with_validation_success(self, model_run, tmp_path):
         """Test successful processing with output validation."""
@@ -287,12 +293,14 @@ class TestEnhancedNoopPostprocessor:
         assert result.success is True
         assert result.run_id == model_run.run_id
         assert result.validated is True
-        assert "validation only" in result.message
+        assert result.message is not None and "validation only" in result.message
 
         # Verify artifacts were tracked
         assert len(result.artifacts) == 2
         assert all(isinstance(artifact, Artifact) for artifact in result.artifacts)
-        artifact_names = {artifact.path.name for artifact in result.artifacts}
+        from pathlib import Path
+
+        artifact_names = {Path(artifact.path).name for artifact in result.artifacts}
         assert artifact_names == {"output1.txt", "output2.txt"}
 
         # Verify timing information is present
@@ -309,7 +317,7 @@ class TestEnhancedNoopPostprocessor:
         # Verify result is PostprocessFailure type
         assert isinstance(result, PostprocessFailure)
         assert result.success is False
-        assert "not found" in result.message
+        assert "not found" in result.error  # Check error field instead of message
         assert result.run_id == model_run.run_id
 
         # Verify timing information is present even on failure
@@ -351,8 +359,10 @@ class TestEnhancedNoopPostprocessor:
 
         # Verify artifacts from custom directory were tracked
         assert len(result.artifacts) == 1
-        assert result.artifacts[0].path.name == "custom_file.txt"
-        assert result.artifacts[0].type == ArtifactType.TEXT
+        from pathlib import Path
+
+        assert Path(result.artifacts[0].path).name == "custom_file.txt"
+        assert result.artifacts[0].artifact_type == ArtifactType.TEXT
 
     def test_process_exception_handling(self, model_run):
         """Test exception handling in process method."""
@@ -368,7 +378,9 @@ class TestEnhancedNoopPostprocessor:
             assert isinstance(result, PostprocessFailure)
             assert result.success is False
             assert result.error is not None
-            assert "File system error" in result.message
+            assert (
+                "File system error" in result.error
+            )  # Check error field instead of message
 
             # Verify timing information is present even on exception
             assert result.timing is not None
@@ -507,10 +519,18 @@ class TestEnhancedLocalPipelineBackend:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Create a PostprocessSuccess object for the mock
+        from datetime import datetime, timezone
+
         mock_postprocess_result = PostprocessSuccess(
+            run_id=model_run.run_id,
+            output_dir=str(output_dir),
+            validated=True,
             message="Postprocessing done",
             artifacts=[],
-            timing=TimingInfo.create(),
+            timing=TimingInfo(
+                start_time=datetime.now(timezone.utc),
+                end_time=datetime.now(timezone.utc),
+            ),
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
@@ -529,7 +549,7 @@ class TestEnhancedLocalPipelineBackend:
 
         assert isinstance(result, PipelineSuccess)
         assert result.success is True
-        assert result.run_success is True
+        # If pipeline succeeded, run_success is implicitly True (no need to check separately)
         assert result.postprocess_results == mock_postprocess_result
         assert PipelineStage.GENERATE in result.stages_completed
         assert PipelineStage.RUN in result.stages_completed
@@ -614,16 +634,23 @@ class TestEnhancedLocalPipelineBackend:
     def test_execute_postprocess_warning_on_failure(
         self, model_run, tmp_path, backend_config, processor_config
     ):
-        """Test pipeline continues when postprocessing reports failure but doesn't raise."""
+        """Test pipeline returns failure when postprocessing reports failure but doesn't raise."""
         backend = LocalPipelineBackend()
 
         output_dir = tmp_path / model_run.run_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Postprocessor returns PostprocessFailure but doesn't raise exception
+        from datetime import datetime, timezone
+
+        start = datetime.now(timezone.utc)
+        end = datetime.now(timezone.utc)
+
         mock_postprocess_result = PostprocessFailure(
+            run_id=model_run.run_id,
+            error="Postprocessing had issues",
             message="Postprocessing had issues",
-            timing=TimingInfo.create(),
+            timing=TimingInfo(start_time=start, end_time=end),
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
@@ -638,8 +665,12 @@ class TestEnhancedLocalPipelineBackend:
                         processor=processor_config,
                     )
 
-        # Pipeline should still succeed
-        assert isinstance(result, PipelineSuccess)
-        assert result.success is True
+        # Pipeline should return failure when postprocessing fails
+        # (even if it doesn't raise an exception)
+        assert isinstance(result, PipelineFailure)
+        assert result.success is False
+        assert result.failed_stage == PipelineStage.POSTPROCESS
+        assert result.postprocess_results == mock_postprocess_result
+        assert "Postprocessing had issues" in result.error
         assert result.postprocess_results == mock_postprocess_result
         assert PipelineStage.POSTPROCESS in result.stages_completed

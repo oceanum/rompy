@@ -236,5 +236,8 @@ class TestModelRunIntegration:
             ),
         )
 
-        with pytest.raises(TypeError, match="BasePostprocessorConfig"):
-            model.postprocess("noop")
+        # New behavior: returns PostprocessFailure instead of raising TypeError
+        result = model.postprocess("noop")
+        assert isinstance(result, PostprocessFailure)
+        assert not result.success
+        assert "BasePostprocessorConfig" in result.error

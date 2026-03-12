@@ -370,12 +370,20 @@ class TestBackwardCompatibilityWarning:
         with caplog.at_level(logging.WARNING):
             with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
                 with patch("rompy.model.ModelRun.run", return_value=True):
+                    from datetime import timezone
+
+                    start = datetime.now(timezone.utc)
+                    end = datetime.now(timezone.utc)
+
                     with patch(
                         "rompy.model.ModelRun.postprocess",
                         return_value=PostprocessSuccess(
+                            run_id="test_run",
+                            output_dir=str(output_dir),
+                            validated=True,
                             message="Postprocessing done",
                             artifacts=[],
-                            timing=TimingInfo.create(),
+                            timing=TimingInfo(start_time=start, end_time=end),
                         ),
                     ):
                         result = backend.execute(
