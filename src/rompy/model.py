@@ -452,9 +452,11 @@ class ModelRun(RompyBaseModel):
                 backend_used=backend_class_name,
                 output_dir=output_dir_str,
                 workspace_dir=workspace_dir_str,
-                message="Model execution completed successfully"
-                if success
-                else "Model execution failed",
+                message=(
+                    "Model execution completed successfully"
+                    if success
+                    else "Model execution failed"
+                ),
                 timing=TimingInfo(
                     start_time=start_time,
                     end_time=datetime.now(timezone.utc),
@@ -469,9 +471,11 @@ class ModelRun(RompyBaseModel):
             return ModelRunResult(
                 success=False,
                 run_id=self.run_id,
-                backend_used=type(backend).__name__.replace("Config", "")
-                if isinstance(backend, BaseBackendConfig)
-                else "unknown",
+                backend_used=(
+                    type(backend).__name__.replace("Config", "")
+                    if isinstance(backend, BaseBackendConfig)
+                    else "unknown"
+                ),
                 output_dir=str(self.output_dir) if self.output_dir else None,
                 workspace_dir=workspace_dir,
                 error=str(e),
@@ -498,8 +502,35 @@ class ModelRun(RompyBaseModel):
             PostprocessResult: Typed result object with success status, timing,
                 and artifacts (for success) or error details (for failure).
 
+                The result is a discriminated union:
+                - PostprocessSuccess: Contains artifacts list, output_dir, timing
+                - PostprocessFailure: Contains error message, timing
+
         Raises:
             TypeError: If processor is not a BasePostprocessorConfig instance
+
+        Examples:
+            ::
+
+                from rompy.postprocess.config import NoopPostprocessorConfig
+
+                # Run postprocessing
+                result = model.postprocess(NoopPostprocessorConfig())
+
+                # Type-safe result handling with discriminated union
+                if result.success:
+                    # Type narrowing: result is PostprocessSuccess
+                    print(f"Generated {len(result.artifacts)} artifacts")
+                    for artifact in result.artifacts:
+                        print(f"  {artifact.type.value}: {artifact.path}")
+                    print(f"Completed in {result.timing.duration_seconds}s")
+                else:
+                    # Type narrowing: result is PostprocessFailure
+                    print(f"Failed: {result.error}")
+                    print(f"Message: {result.message}")
+
+                # Serialize to dict for logging or storage
+                result_dict = result.model_dump()
         """
         from rompy.postprocess.config import BasePostprocessorConfig
 
@@ -531,6 +562,7 @@ class ModelRun(RompyBaseModel):
         except Exception as e:
             # Wrap any top-level exceptions in PostprocessFailure
             return PostprocessFailure(
+                run_id=self.run_id,
                 message=f"Postprocessing failed: {str(e)}",
                 error=str(e),
                 timing=TimingInfo(
@@ -562,8 +594,49 @@ class ModelRun(RompyBaseModel):
             PipelineResult: Typed result object with success status, timing, stage tracking,
                 and nested postprocess results.
 
+                The result is a discriminated union:
+                - PipelineSuccess: Contains stages_completed, nested postprocess_results, timing
+                - PipelineFailure: Contains failed_stage, error, optional postprocess_results
+
         Raises:
             ValueError: If the specified pipeline backend is not available
+
+        Examples:
+            ::
+
+                from rompy.backends import LocalConfig
+                from rompy.postprocess.config import NoopPostprocessorConfig
+
+                # Run complete pipeline
+                result = model.pipeline(
+                    pipeline_backend="local",
+                    backend_config=LocalConfig(timeout=3600),
+                    processor=NoopPostprocessorConfig()
+                )
+
+                # Type-safe result handling with discriminated union
+                if result.success:
+                    # Type narrowing: result is PipelineSuccess
+                    print(f"Stages completed: {[s.value for s in result.stages_completed]}")
+                    print(f"Total time: {result.timing.duration_seconds}s")
+
+                    # Access nested postprocess results
+                    pp_result = result.postprocess_results
+                    if pp_result and pp_result.success:
+                        print(f"Artifacts: {len(pp_result.artifacts)}")
+                        for artifact in pp_result.artifacts:
+                            print(f"  {artifact.type.value}: {artifact.path}")
+                else:
+                    # Type narrowing: result is PipelineFailure
+                    print(f"Failed at stage: {result.failed_stage.value}")
+                    print(f"Error: {result.error}")
+
+                    # Check if postprocessing was attempted
+                    if result.postprocess_results:
+                        print("Postprocess also failed")
+
+                # Serialize to dict for logging
+                result_dict = result.model_dump()
         """
         # Get the requested pipeline backend class from entry points
         if pipeline_backend not in PIPELINE_BACKENDS:

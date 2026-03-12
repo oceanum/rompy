@@ -36,8 +36,10 @@ class LocalPipelineBackend:
     def execute(
         self,
         model_run,
-        backend_config: Union[LocalConfig, DockerConfig, "SlurmConfig"] = None,
-        processor: "BasePostprocessorConfig" = None,
+        backend_config: Optional[
+            Union[LocalConfig, DockerConfig, "SlurmConfig"]
+        ] = None,
+        processor: Optional["BasePostprocessorConfig"] = None,
         run_kwargs: Optional[Dict[str, Any]] = None,
         process_kwargs: Optional[Dict[str, Any]] = None,
         cleanup_on_failure: bool = False,
@@ -57,11 +59,45 @@ class LocalPipelineBackend:
             **kwargs: Additional parameters (for backward compatibility)
 
         Returns:
-            PipelineResult: Success or failure result with stage tracking, timing, and nested postprocess results
+            PipelineResult: Success or failure result with stage tracking, timing, and nested postprocess results.
+
+            The result is a discriminated union:
+            - PipelineSuccess: Contains stages_completed, nested postprocess_results, timing
+            - PipelineFailure: Contains failed_stage, error, optional postprocess_results
 
         Raises:
             ValueError: If model_run is invalid or parameters are invalid
             TypeError: If processor is not a BasePostprocessorConfig instance
+
+        Examples:
+            ::
+
+                from rompy.backends import LocalConfig
+                from rompy.postprocess.config import NoopPostprocessorConfig
+
+                backend = LocalPipelineBackend()
+                result = backend.execute(
+                    model_run=my_model,
+                    backend_config=LocalConfig(timeout=3600),
+                    processor=NoopPostprocessorConfig()
+                )
+
+                # Type-safe result handling with discriminated union
+                if result.success:
+                    # Type narrowing: result is PipelineSuccess
+                    print(f"Stages: {[s.value for s in result.stages_completed]}")
+                    print(f"Duration: {result.timing.duration_seconds}s")
+
+                    # Access nested postprocess results
+                    if result.postprocess_results and result.postprocess_results.success:
+                        print(f"Artifacts: {len(result.postprocess_results.artifacts)}")
+                else:
+                    # Type narrowing: result is PipelineFailure
+                    print(f"Failed at: {result.failed_stage.value}")
+                    print(f"Error: {result.error}")
+
+                # Serialize to dict for logging
+                result_dict = result.model_dump()
         """
         from rompy.postprocess.config import BasePostprocessorConfig
         from rompy.backends.config import BaseBackendConfig
@@ -110,9 +146,14 @@ class LocalPipelineBackend:
         cleaned_up = False
 
         backend_type = backend_config.__class__.__name__.replace("Config", "").lower()
+        processor_type = getattr(
+            processor,
+            "type",
+            processor.__class__.__name__.replace("Config", "").lower(),
+        )
         logger.info(f"Starting pipeline execution for run_id: {model_run.run_id}")
         logger.info(
-            f"Pipeline configuration: backend='{backend_type}', processor='{processor.type}'"
+            f"Pipeline configuration: backend='{backend_type}', processor='{processor_type}'"
         )
 
         try:
@@ -129,7 +170,7 @@ class LocalPipelineBackend:
                     success=False,
                     run_id=model_run.run_id,
                     backend=backend_type,
-                    processor=processor.type,
+                    processor=processor_type,
                     stages_completed=stages_completed,
                     failed_stage=PipelineStage.GENERATE,
                     message=f"Input file generation failed: {str(e)}",
@@ -149,9 +190,10 @@ class LocalPipelineBackend:
                         success=False,
                         run_id=model_run.run_id,
                         backend=backend_type,
-                        processor=processor.type,
+                        processor=processor_type,
                         stages_completed=stages_completed,
                         failed_stage=PipelineStage.GENERATE,
+                        error=f"Output directory not found: {output_dir}",
                         message=f"Output directory not found after generation: {output_dir}",
                         timing=TimingInfo(
                             start_time=start_time, end_time=datetime.now(timezone.utc)
@@ -177,9 +219,10 @@ class LocalPipelineBackend:
                         success=False,
                         run_id=model_run.run_id,
                         backend=backend_type,
-                        processor=processor.type,
+                        processor=processor_type,
                         stages_completed=stages_completed,
                         failed_stage=PipelineStage.RUN,
+                        error="Model run failed",
                         message="Model run failed",
                         timing=TimingInfo(
                             start_time=start_time, end_time=datetime.now(timezone.utc)
@@ -199,7 +242,7 @@ class LocalPipelineBackend:
                     success=False,
                     run_id=model_run.run_id,
                     backend=backend_type,
-                    processor=processor.type,
+                    processor=processor_type,
                     stages_completed=stages_completed,
                     failed_stage=PipelineStage.RUN,
                     message=f"Model run error: {str(e)}",
@@ -211,7 +254,7 @@ class LocalPipelineBackend:
                 )
 
             # Stage 3: Postprocess outputs
-            logger.info(f"Stage 3: Postprocessing with {processor.type}")
+            logger.info(f"Stage 3: Postprocessing with {processor_type}")
 
             try:
                 postprocess_results = model_run.postprocess(
@@ -229,7 +272,7 @@ class LocalPipelineBackend:
                         success=False,
                         run_id=model_run.run_id,
                         backend=backend_type,
-                        processor=processor.type,
+                        processor=processor_type,
                         stages_completed=stages_completed,
                         failed_stage=PipelineStage.POSTPROCESS,
                         message=f"Postprocessing failed: {postprocess_results.message}",
@@ -249,7 +292,7 @@ class LocalPipelineBackend:
                     success=False,
                     run_id=model_run.run_id,
                     backend=backend_type,
-                    processor=processor.type,
+                    processor=processor_type,
                     stages_completed=stages_completed,
                     failed_stage=PipelineStage.POSTPROCESS,
                     message=f"Postprocessing error: {str(e)}",
@@ -264,18 +307,23 @@ class LocalPipelineBackend:
             logger.info(
                 f"Pipeline execution completed successfully for run_id: {model_run.run_id}"
             )
+
+            # Compute output_dir for successful pipeline
+            output_dir_path = Path(model_run.output_dir) / model_run.run_id
+
             return PipelineSuccess(
                 success=True,
                 run_id=model_run.run_id,
                 backend=backend_type,
-                processor=processor.type,
+                processor=processor_type,
                 stages_completed=stages_completed,
+                staging_dir=str(staging_dir),
+                output_dir=str(output_dir_path),
                 postprocess_results=postprocess_results,
                 message="Pipeline completed successfully",
                 timing=TimingInfo(
                     start_time=start_time, end_time=datetime.now(timezone.utc)
                 ),
-                cleaned_up=cleaned_up,
             )
 
         except Exception as e:
@@ -287,11 +335,11 @@ class LocalPipelineBackend:
                 success=False,
                 run_id=model_run.run_id,
                 backend=backend_type,
-                processor=processor.type,
+                processor=processor_type,
                 stages_completed=stages_completed,
-                failed_stage=stages_completed[-1]
-                if stages_completed
-                else PipelineStage.GENERATE,
+                failed_stage=(
+                    stages_completed[-1] if stages_completed else PipelineStage.GENERATE
+                ),
                 message=f"Pipeline error: {str(e)}",
                 error=str(e),
                 timing=TimingInfo(
