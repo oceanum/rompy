@@ -11,14 +11,14 @@ Tests cover:
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+
 
 import pytest
 import yaml
 
 from rompy.backends import LocalConfig
 from rompy.cli import load_config
-from rompy.core.responses import PostprocessSuccess, TimingInfo
+
 from rompy.core.time import TimeRange
 from rompy.core.yaml_loader import load_yaml_with_includes
 from rompy.model import ModelRun
@@ -341,17 +341,12 @@ class TestPipelineConfigComposition:
         assert loaded_config["config"]["run_id"] == "nested_test"
 
 
-class TestBackwardCompatibilityWarning:
-    """Test that using old parameter names triggers warnings."""
+class TestBackendConfigRequired:
+    """Test that backend_config is required and old parameter names raise errors."""
 
-    def test_old_run_backend_parameter_warning(self, tmp_path, caplog):
-        """Test that passing run_backend string logs a deprecation warning."""
-        import logging
+    def test_missing_backend_config_raises_value_error(self, tmp_path):
+        """Test that omitting backend_config raises ValueError."""
         from rompy.pipeline import LocalPipelineBackend
-
-        # Create the output directory structure that the pipeline expects
-        output_dir = tmp_path / "test_run"
-        output_dir.mkdir(parents=True, exist_ok=True)
 
         model_run = ModelRun(
             run_id="test_run",
@@ -367,36 +362,38 @@ class TestBackwardCompatibilityWarning:
         backend = LocalPipelineBackend()
         processor_config = NoopPostprocessorConfig()
 
-        with caplog.at_level(logging.WARNING):
-            with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-                with patch("rompy.model.ModelRun.run", return_value=True):
-                    from datetime import timezone
+        # backend_config is required; omitting it (even with old-style run_backend kwarg)
+        # must raise ValueError immediately
+        with pytest.raises(ValueError, match="backend_config is required"):
+            backend.execute(
+                model_run,
+                run_backend="local",  # Old parameter name goes to **kwargs, ignored
+                processor=processor_config,
+            )
 
-                    start = datetime.now(timezone.utc)
-                    end = datetime.now(timezone.utc)
+    def test_invalid_backend_config_type_raises_type_error(self, tmp_path):
+        """Test that passing a non-BackendConfig object raises TypeError."""
+        from rompy.pipeline import LocalPipelineBackend
 
-                    with patch(
-                        "rompy.model.ModelRun.postprocess",
-                        return_value=PostprocessSuccess(
-                            run_id="test_run",
-                            output_dir=str(output_dir),
-                            validated=True,
-                            message="Postprocessing done",
-                            artifacts=[],
-                            timing=TimingInfo(start_time=start, end_time=end),
-                        ),
-                    ):
-                        result = backend.execute(
-                            model_run,
-                            run_backend="local",  # Old parameter name
-                            processor=processor_config,
-                        )
-
-        # Check that deprecation warning was logged
-        assert any(
-            "run_backend" in record.message and "deprecated" in record.message
-            for record in caplog.records
+        model_run = ModelRun(
+            run_id="test_run",
+            period=TimeRange(
+                start=datetime(2023, 1, 1),
+                end=datetime(2023, 1, 2),
+                interval="1H",
+            ),
+            output_dir=str(tmp_path),
+            config=DemoConfig(arg1="foo", arg2="bar"),
         )
 
-        # Should still work with backward compatibility
-        assert result.success is True
+        backend = LocalPipelineBackend()
+        processor_config = NoopPostprocessorConfig()
+
+        with pytest.raises(
+            TypeError, match="backend_config must be a BaseBackendConfig"
+        ):
+            backend.execute(
+                model_run,
+                backend_config="local",  # Wrong type
+                processor=processor_config,
+            )

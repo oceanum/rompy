@@ -22,6 +22,7 @@ from rompy.run import LocalRunBackend
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
+    ModelRunResult,
     PipelineFailure,
     PipelineStage,
     PipelineSuccess,
@@ -493,7 +494,9 @@ class TestEnhancedLocalPipelineBackend:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            with patch("rompy.model.ModelRun.run", return_value=True):
+            with patch(
+                "rompy.model.ModelRun.run", return_value=MagicMock(success=True)
+            ):
                 with patch(
                     "rompy.model.ModelRun.postprocess",
                     side_effect=Exception("Postprocess failed"),
@@ -534,14 +537,16 @@ class TestEnhancedLocalPipelineBackend:
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            with patch("rompy.model.ModelRun.run", return_value=True):
+            with patch(
+                "rompy.model.ModelRun.run", return_value=MagicMock(success=True)
+            ):
                 with patch(
                     "rompy.model.ModelRun.postprocess",
                     return_value=mock_postprocess_result,
                 ):
                     result = backend.execute(
                         model_run,
-                        run_backend="local",
+                        backend_config=LocalConfig(),
                         processor=processor_config,
                         run_kwargs={"param1": "value1"},
                         process_kwargs={"param2": "value2"},
@@ -590,7 +595,9 @@ class TestEnhancedLocalPipelineBackend:
         test_file.write_text("test content")
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            with patch("rompy.model.ModelRun.run", return_value=False):
+            with patch(
+                "rompy.model.ModelRun.run", return_value=MagicMock(success=False)
+            ):
                 result = backend.execute(
                     model_run,
                     backend_config=backend_config,
@@ -654,7 +661,9 @@ class TestEnhancedLocalPipelineBackend:
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            with patch("rompy.model.ModelRun.run", return_value=True):
+            with patch(
+                "rompy.model.ModelRun.run", return_value=MagicMock(success=True)
+            ):
                 with patch(
                     "rompy.model.ModelRun.postprocess",
                     return_value=mock_postprocess_result,

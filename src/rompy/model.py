@@ -329,64 +329,16 @@ class ModelRun(RompyBaseModel):
     def __call__(self):
         return self.generate()
 
-    def run(self, backend: BackendConfig, workspace_dir: Optional[str] = None) -> bool:
+    def run(
+        self, backend: BackendConfig, workspace_dir: Optional[str] = None
+    ) -> ModelRunResult:
         """
         Run the model using the specified backend configuration.
 
         This method uses Pydantic configuration objects that provide type safety
-        and validation for all backend parameters.
-
-        Args:
-            backend: Pydantic configuration object (LocalConfig, DockerConfig, etc.)
-            workspace_dir: Path to generated workspace directory (optional)
-
-        Returns:
-            True if execution was successful, False otherwise
-
-        Raises:
-            TypeError: If backend is not a BackendConfig instance
-
-        Examples:
-            from rompy.backends import LocalConfig, DockerConfig
-
-            # Local execution
-            model.run(LocalConfig(timeout=3600, command="python run.py"))
-
-            # Docker execution
-            model.run(DockerConfig(image="swan:latest", cpu=4, memory="2g"))
-        """
-        if not isinstance(backend, BaseBackendConfig):
-            raise TypeError(
-                f"Backend must be a subclass of BaseBackendConfig, "
-                f"got {type(backend).__name__}"
-            )
-
-        logger.debug(f"Using backend config: {type(backend).__name__}")
-
-        # Get the backend class directly from the configuration
-        backend_class = backend.get_backend_class()
-        backend_instance = backend_class()
-
-        # Pass the config object and workspace_dir to the backend
-        return backend_instance.run(self, config=backend, workspace_dir=workspace_dir)
-
-    def run_detailed(
-        self, backend: BackendConfig, workspace_dir: Optional[str] = None
-    ) -> ModelRunResult:
-        """
-        Run the model using the specified backend and return detailed results.
-
-        This method provides the same functionality as `run()` but returns a
-        structured `ModelRunResult` object with timing information, metadata,
-        and detailed error messages instead of just a boolean.
-
-        Use this method when you need:
-        - Execution timing information
-        - Backend metadata and diagnostics
-        - Structured error handling
-        - Integration with typed pipeline results
-
-        For simple success/failure checking, use `run()` instead.
+        and validation for all backend parameters. It returns a structured
+        ``ModelRunResult`` with timing information, metadata, and detailed error
+        messages.
 
         Args:
             backend: Pydantic configuration object (LocalConfig, DockerConfig, etc.)
@@ -396,26 +348,20 @@ class ModelRun(RompyBaseModel):
             ModelRunResult: Structured result object with success status, timing,
                 backend information, and error details (if applicable).
 
-        Raises:
-            TypeError: If backend is not a BackendConfig instance
-
         Examples:
             ::
 
-                from rompy.backends import LocalConfig
+                from rompy.backends import LocalConfig, DockerConfig
 
-                # Get detailed results
-                result = model.run_detailed(LocalConfig(timeout=3600))
-
+                # Local execution
+                result = model.run(LocalConfig(timeout=3600, command="python run.py"))
                 if result.success:
                     print(f"Completed in {result.timing.duration_seconds}s")
-                    print(f"Output: {result.output_dir}")
-                else:
-                    print(f"Failed: {result.error}")
 
-                # Access backend metadata
-                print(f"Backend: {result.backend_used}")
-                print(f"Metadata: {result.metadata}")
+                # Docker execution
+                result = model.run(DockerConfig(image="swan:latest", cpu=4, memory="2g"))
+                if not result.success:
+                    print(f"Failed: {result.error}")
         """
         start_time = datetime.now(timezone.utc)
 
@@ -436,14 +382,17 @@ class ModelRun(RompyBaseModel):
                     ),
                 )
 
-            # Call the existing run() method
-            success = self.run(backend, workspace_dir=workspace_dir)
+            logger.debug(f"Using backend config: {type(backend).__name__}")
+
+            # Dispatch directly to the backend
+            backend_class = backend.get_backend_class()
+            backend_instance = backend_class()
+            success = backend_instance.run(
+                self, config=backend, workspace_dir=workspace_dir
+            )
 
             # Determine output/workspace directories
             output_dir_str = str(self.output_dir) if self.output_dir else None
-            workspace_dir_str = workspace_dir
-
-            # Construct result object
             backend_class_name = type(backend).__name__.replace("Config", "")
 
             return ModelRunResult(
@@ -451,7 +400,7 @@ class ModelRun(RompyBaseModel):
                 run_id=self.run_id,
                 backend_used=backend_class_name,
                 output_dir=output_dir_str,
-                workspace_dir=workspace_dir_str,
+                workspace_dir=workspace_dir,
                 message=(
                     "Model execution completed successfully"
                     if success

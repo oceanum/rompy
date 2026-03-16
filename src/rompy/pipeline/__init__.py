@@ -109,20 +109,10 @@ class LocalPipelineBackend:
         if not hasattr(model_run, "run_id"):
             raise ValueError("model_run must have a run_id attribute")
 
-        # Handle backward compatibility: accept run_backend string from kwargs
         if backend_config is None:
-            run_backend = kwargs.get("run_backend")
-            if run_backend:
-                logger.warning(
-                    "Passing run_backend as string is deprecated. "
-                    "Use backend_config parameter instead."
-                )
-                run_kwargs = run_kwargs or {}
-                backend_config = self._create_backend_config(run_backend, run_kwargs)
-            else:
-                raise ValueError(
-                    "backend_config is required. Provide a BackendConfig instance."
-                )
+            raise ValueError(
+                "backend_config is required. Provide a BackendConfig instance."
+            )
 
         if not isinstance(backend_config, BaseBackendConfig):
             raise TypeError(
@@ -206,11 +196,11 @@ class LocalPipelineBackend:
 
             try:
                 # Pass the generated workspace directory to avoid duplicate generation
-                run_success = model_run.run(
+                run_result = model_run.run(
                     backend=backend_config, workspace_dir=staging_dir
                 )
 
-                if not run_success:
+                if not run_result.success:
                     logger.error("Model run failed")
                     if cleanup_on_failure:
                         self._cleanup_outputs(model_run)
@@ -364,39 +354,3 @@ class LocalPipelineBackend:
                 logger.info("Cleanup completed")
         except Exception as e:
             logger.warning(f"Failed to cleanup output directory: {e}")
-
-    def _create_backend_config(self, run_backend: str, run_kwargs: Dict[str, Any]):
-        """Create appropriate backend configuration from string name and kwargs.
-
-        Args:
-            run_backend: Backend name ("local" or "docker")
-            run_kwargs: Additional configuration parameters
-
-        Returns:
-            Backend configuration object
-
-        Raises:
-            ValueError: If backend name is not supported
-        """
-        if run_backend == "local":
-            # Filter kwargs to only include valid LocalConfig fields
-            valid_fields = set(LocalConfig.model_fields.keys())
-            filtered_kwargs = {k: v for k, v in run_kwargs.items() if k in valid_fields}
-            if filtered_kwargs != run_kwargs:
-                invalid_fields = set(run_kwargs.keys()) - valid_fields
-                logger.warning(f"Ignoring invalid LocalConfig fields: {invalid_fields}")
-            return LocalConfig(**filtered_kwargs)
-        elif run_backend == "docker":
-            # Filter kwargs to only include valid DockerConfig fields
-            valid_fields = set(DockerConfig.model_fields.keys())
-            filtered_kwargs = {k: v for k, v in run_kwargs.items() if k in valid_fields}
-            if filtered_kwargs != run_kwargs:
-                invalid_fields = set(run_kwargs.keys()) - valid_fields
-                logger.warning(
-                    f"Ignoring invalid DockerConfig fields: {invalid_fields}"
-                )
-            return DockerConfig(**filtered_kwargs)
-        else:
-            raise ValueError(
-                f"Unsupported backend: {run_backend}. Supported: local, docker"
-            )

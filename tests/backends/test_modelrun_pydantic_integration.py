@@ -70,7 +70,7 @@ class TestModelRunPydanticIntegration:
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             result = model_run.run(backend=config)
 
-        assert result is True
+        assert result.success is True
         assert (output_dir / "test_file.txt").exists()
         assert "test output" in (output_dir / "test_file.txt").read_text()
 
@@ -88,7 +88,7 @@ class TestModelRunPydanticIntegration:
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             result = model_run_with_run_method.run(backend=config)
 
-        assert result is True
+        assert result.success is True
         # Verify config.run() was called
         model_run_with_run_method.config.run.assert_called_once_with(
             model_run_with_run_method
@@ -109,7 +109,7 @@ class TestModelRunPydanticIntegration:
 
             result = model_run.run(backend=config)
 
-            assert result is True
+            assert result.success is True
             # Verify DockerRunBackend was instantiated and called
             mock_docker_backend_class.assert_called_once()
             mock_backend_instance.run.assert_called_once_with(
@@ -117,22 +117,22 @@ class TestModelRunPydanticIntegration:
             )
 
     def test_run_with_invalid_backend_type(self, model_run):
-        """Test ModelRun.run() raises TypeError for invalid backend types."""
-        # Invalid types should raise TypeError
-        with pytest.raises(
-            TypeError, match="Backend must be a subclass of BaseBackendConfig"
-        ):
-            model_run.run(backend="invalid_string")
+        """Test ModelRun.run() returns failure result for invalid backend types."""
+        # Invalid types should return ModelRunResult with success=False (not raise)
+        result = model_run.run(backend="invalid_string")
+        assert isinstance(result, ModelRunResult)
+        assert result.success is False
+        assert "BaseBackendConfig" in result.error
 
-        with pytest.raises(
-            TypeError, match="Backend must be a subclass of BaseBackendConfig"
-        ):
-            model_run.run(backend={"invalid": "dict"})
+        result = model_run.run(backend={"invalid": "dict"})
+        assert isinstance(result, ModelRunResult)
+        assert result.success is False
+        assert "BaseBackendConfig" in result.error
 
-        with pytest.raises(
-            TypeError, match="Backend must be a subclass of BaseBackendConfig"
-        ):
-            model_run.run(backend=123)
+        result = model_run.run(backend=123)
+        assert isinstance(result, ModelRunResult)
+        assert result.success is False
+        assert "BaseBackendConfig" in result.error
 
     def test_run_with_local_config_env_vars(self, model_run, tmp_path):
         """Test ModelRun.run() with LocalConfig and environment variables."""
@@ -150,7 +150,7 @@ class TestModelRunPydanticIntegration:
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             result = model_run.run(backend=config)
 
-        assert result is True
+        assert result.success is True
         env_file = output_dir / "env_test.txt"
         assert env_file.exists()
         assert "hello_world" in env_file.read_text()
@@ -170,7 +170,7 @@ class TestModelRunPydanticIntegration:
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             result = model_run.run(backend=config)
 
-        assert result is False
+        assert result.success is False
 
     def test_run_backend_exception_handling(self, model_run):
         """Test that backend exceptions are handled gracefully."""
@@ -182,9 +182,11 @@ class TestModelRunPydanticIntegration:
 
             config = LocalConfig()
 
-            # Exception should be raised by the backend
-            with pytest.raises(Exception, match="Backend error"):
-                model_run.run(backend=config)
+            # Exception should be caught and wrapped in ModelRunResult
+            result = model_run.run(backend=config)
+            assert isinstance(result, ModelRunResult)
+            assert result.success is False
+            assert "Backend error" in result.error
 
     def test_local_config_validation_in_modelrun_context(self, model_run, tmp_path):
         """Test LocalConfig validation works in ModelRun context."""
@@ -249,8 +251,8 @@ class TestModelRunPydanticIntegration:
         assert isinstance(local_config, BackendConfig)
         assert isinstance(docker_config, BackendConfig)
 
-    def test_run_detailed_success(self, model_run, tmp_path):
-        """Test ModelRun.run_detailed() returns ModelRunResult on success."""
+    def test_run_success(self, model_run, tmp_path):
+        """Test ModelRun.run() returns ModelRunResult on success."""
         # Create output directory
         output_dir = tmp_path / model_run.run_id
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -262,7 +264,7 @@ class TestModelRunPydanticIntegration:
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            result = model_run.run_detailed(backend=config)
+            result = model_run.run(backend=config)
 
         # Verify result type
         assert isinstance(result, ModelRunResult)
@@ -281,8 +283,8 @@ class TestModelRunPydanticIntegration:
         assert result.metadata is not None
         assert "backend_config" in result.metadata
 
-    def test_run_detailed_failure(self, model_run, tmp_path):
-        """Test ModelRun.run_detailed() returns failure result on error."""
+    def test_run_failure(self, model_run, tmp_path):
+        """Test ModelRun.run() returns failure result on error."""
         config = LocalConfig(
             command="exit 1",  # Command that fails
             working_dir=tmp_path,
@@ -293,7 +295,7 @@ class TestModelRunPydanticIntegration:
                 "rompy.run.LocalRunBackend.run",
                 return_value=False,  # Simulate failure
             ):
-                result = model_run.run_detailed(backend=config)
+                result = model_run.run(backend=config)
 
         # Verify result type
         assert isinstance(result, ModelRunResult)
@@ -305,10 +307,10 @@ class TestModelRunPydanticIntegration:
         assert result.timing is not None
         assert result.timing.duration_seconds >= 0
 
-    def test_run_detailed_invalid_backend(self, model_run):
-        """Test ModelRun.run_detailed() handles invalid backend type."""
+    def test_run_invalid_backend(self, model_run):
+        """Test ModelRun.run() handles invalid backend type."""
         # Pass invalid backend type (string instead of config)
-        result = model_run.run_detailed(backend="invalid")
+        result = model_run.run(backend="invalid")
 
         # Should return failure result, not raise exception
         assert isinstance(result, ModelRunResult)
@@ -316,15 +318,16 @@ class TestModelRunPydanticIntegration:
         assert "BaseBackendConfig" in result.error
         assert result.timing is not None
 
-    def test_run_detailed_exception_handling(self, model_run):
-        """Test ModelRun.run_detailed() handles exceptions gracefully."""
+    def test_run_exception_handling(self, model_run):
+        """Test ModelRun.run() handles exceptions from the backend gracefully."""
         config = LocalConfig(command="echo test")
 
+        # Patch the backend's run() so the outer ModelRun.run() catches the exception
         with patch(
-            "rompy.model.ModelRun.run",
+            "rompy.run.LocalRunBackend.run",
             side_effect=RuntimeError("Simulated backend error"),
         ):
-            result = model_run.run_detailed(backend=config)
+            result = model_run.run(backend=config)
 
         # Should return failure result with error details
         assert isinstance(result, ModelRunResult)
@@ -333,8 +336,8 @@ class TestModelRunPydanticIntegration:
         assert "exception" in result.message.lower()
         assert result.timing is not None
 
-    def test_run_detailed_timing_accuracy(self, model_run, tmp_path):
-        """Test that run_detailed() captures accurate timing information."""
+    def test_run_timing_accuracy(self, model_run, tmp_path):
+        """Test that run() captures accurate timing information."""
         import time
 
         output_dir = tmp_path / model_run.run_id
@@ -346,14 +349,14 @@ class TestModelRunPydanticIntegration:
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            result = model_run.run_detailed(backend=config)
+            result = model_run.run(backend=config)
 
         # Verify timing was captured
         assert result.timing.duration_seconds >= 0.05  # At least some time passed
         assert result.timing.start_time < result.timing.end_time
 
-    def test_run_detailed_metadata_includes_config(self, model_run, tmp_path):
-        """Test that run_detailed() includes backend config in metadata."""
+    def test_run_metadata_includes_config(self, model_run, tmp_path):
+        """Test that run() includes backend config in metadata."""
         output_dir = tmp_path / model_run.run_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -364,7 +367,7 @@ class TestModelRunPydanticIntegration:
         )
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
-            result = model_run.run_detailed(backend=config)
+            result = model_run.run(backend=config)
 
         # Verify metadata contains backend config
         assert result.metadata is not None
