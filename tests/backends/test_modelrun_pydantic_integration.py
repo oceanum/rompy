@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rompy.backends import DockerConfig, LocalConfig
-from rompy.core.responses import ModelRunResult
+from rompy.core.responses import Artifact, ModelRunResult
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 from tests.test_helpers import DemoConfig
@@ -375,3 +375,48 @@ class TestModelRunPydanticIntegration:
         backend_config_dict = result.metadata["backend_config"]
         assert backend_config_dict["command"] == "echo test"
         assert backend_config_dict["timeout"] == 7200
+
+    def test_run_success_populates_artifacts_from_validate_outputs(
+        self, model_run, tmp_path
+    ):
+        """Test successful run includes artifacts from config.validate_outputs()."""
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="echo test",
+            working_dir=output_dir,
+        )
+        discovered = [Artifact(path=str(output_dir / "result.nc"))]
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+            with patch.object(
+                DemoConfig, "validate_outputs", return_value=discovered
+            ) as mock_validate:
+                result = model_run.run(backend=config)
+
+        assert result.success is True
+        assert result.artifacts == discovered
+        mock_validate.assert_called_once_with(str(model_run.output_dir))
+
+    def test_run_failure_does_not_validate_outputs(self, model_run, tmp_path):
+        """Test failed run does not call config.validate_outputs()."""
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="exit 1",
+            working_dir=output_dir,
+        )
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+            with patch(
+                "rompy.run.LocalRunBackend.run",
+                return_value=False,
+            ):
+                with patch.object(DemoConfig, "validate_outputs") as mock_validate:
+                    result = model_run.run(backend=config)
+
+        assert result.success is False
+        assert result.artifacts == []
+        mock_validate.assert_not_called()

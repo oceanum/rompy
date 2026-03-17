@@ -394,6 +394,9 @@ class ModelRun(RompyBaseModel):
             # Determine output/workspace directories
             output_dir_str = str(self.output_dir) if self.output_dir else None
             backend_class_name = type(backend).__name__.replace("Config", "")
+            artifacts = []
+            if success and output_dir_str:
+                artifacts = self.config.validate_outputs(output_dir_str)
 
             return ModelRunResult(
                 success=success,
@@ -401,6 +404,7 @@ class ModelRun(RompyBaseModel):
                 backend_used=backend_class_name,
                 output_dir=output_dir_str,
                 workspace_dir=workspace_dir,
+                artifacts=artifacts,
                 message=(
                     "Model execution completed successfully"
                     if success

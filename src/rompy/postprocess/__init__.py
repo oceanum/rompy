@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from rompy.core.responses import (
-    Artifact,
-    ArtifactType,
     PostprocessFailure,
     PostprocessResult,
     PostprocessSuccess,
@@ -118,38 +116,9 @@ class NoopPostprocessor:
                         ),
                     )
 
-                # Count files and classify artifacts
-                output_files = [f for f in check_dir.rglob("*") if f.is_file()]
-                file_count = len(output_files)
+                artifacts = model_run.config.validate_outputs(check_dir)
+                file_count = len(artifacts)
                 logger.info(f"Found {file_count} output files in {check_dir}")
-
-                # Classify artifacts by file extension
-                artifacts = []
-                for file_path in output_files:
-                    artifact_type = None
-                    suffix = file_path.suffix.lower()
-                    if suffix in [".yaml", ".yml"]:
-                        artifact_type = ArtifactType.YAML
-                    elif suffix == ".nc":
-                        artifact_type = ArtifactType.NETCDF
-                    elif suffix in [".png", ".jpg", ".pdf", ".svg"]:
-                        artifact_type = ArtifactType.PLOT
-                    elif suffix == ".txt":
-                        artifact_type = ArtifactType.TEXT
-                    else:
-                        artifact_type = ArtifactType.OTHER
-
-                    artifacts.append(
-                        Artifact(
-                            path=str(file_path),
-                            artifact_type=artifact_type,
-                            size_bytes=(
-                                file_path.stat().st_size
-                                if file_path.is_file()
-                                else None
-                            ),
-                        )
-                    )
 
                 logger.info(
                     f"No-op postprocessing completed for run_id: {model_run.run_id}"

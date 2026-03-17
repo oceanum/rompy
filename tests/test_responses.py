@@ -29,12 +29,13 @@ class TestArtifactType:
         assert ArtifactType.NETCDF == "netcdf"
         assert ArtifactType.PLOT == "plot"
         assert ArtifactType.TEXT == "text"
+        assert ArtifactType.RESTART == "restart"
         assert ArtifactType.OTHER == "other"
 
     def test_enum_iteration(self):
         """Test enum can be iterated."""
         values = [e.value for e in ArtifactType]
-        assert values == ["yaml", "netcdf", "plot", "text", "other"]
+        assert values == ["yaml", "netcdf", "plot", "text", "restart", "other"]
 
 
 class TestPipelineStage:
@@ -455,6 +456,21 @@ class TestModelRunResult:
 
         assert result.metadata["job_id"] == "12345"
         assert result.metadata["nodes"] == 2
+
+    def test_artifacts_default_empty(self):
+        """Test ModelRunResult artifacts defaults to empty list."""
+        result = ModelRunResult(
+            success=True,
+            run_id="test-123",
+            backend_used="LocalRunBackend",
+            output_dir="/output",
+            timing=TimingInfo(
+                start_time=datetime.now(timezone.utc),
+                end_time=datetime.now(timezone.utc),
+            ),
+        )
+
+        assert result.artifacts == []
 
 
 class TestValidation:

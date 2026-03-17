@@ -81,6 +81,7 @@ class ArtifactType(str, Enum):
         NETCDF: NetCDF data files (model output)
         PLOT: Plot/visualization files (PNG, PDF, SVG, etc.)
         TEXT: Text files (logs, reports, etc.)
+        RESTART: Restart/checkpoint files for continuing a run
         OTHER: Other file types
     """
 
@@ -88,6 +89,7 @@ class ArtifactType(str, Enum):
     NETCDF = "netcdf"
     PLOT = "plot"
     TEXT = "text"
+    RESTART = "restart"
     OTHER = "other"
 
 
@@ -370,6 +372,7 @@ class ModelRunResult(RompyBaseModel):
         output_dir: Output directory path
         workspace_dir: Workspace directory (backend-specific)
         timing: Execution timing
+        artifacts: List of output artifacts discovered after execution
         error: Error message if success=False
         message: Additional context
         metadata: Backend-specific metadata (extensible dict)
@@ -382,6 +385,7 @@ class ModelRunResult(RompyBaseModel):
             if result.success:
                 print(f"Run completed in {result.timing.duration_seconds:.1f}s")
                 print(f"Output: {result.output_dir}")
+                print(f"Artifacts: {len(result.artifacts)}")
             else:
                 print(f"Run failed: {result.error}")
     """
@@ -392,6 +396,10 @@ class ModelRunResult(RompyBaseModel):
     output_dir: str = Field(..., description="Output directory path")
     workspace_dir: Optional[str] = Field(None, description="Workspace directory")
     timing: TimingInfo = Field(..., description="Execution timing")
+    artifacts: List[Artifact] = Field(
+        default_factory=list,
+        description="Output artifacts discovered after execution",
+    )
     error: Optional[str] = Field(None, description="Error message if success=False")
     message: Optional[str] = Field(None, description="Additional context")
     metadata: Dict[str, Any] = Field(
