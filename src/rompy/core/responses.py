@@ -109,6 +109,9 @@ class Artifact(RompyBaseModel):
     )
     size_bytes: Optional[int] = Field(None, description="File size in bytes")
     description: Optional[str] = Field(None, description="Human-readable description")
+    date: Optional[str] = Field(
+        None, description="Artifact timestamp in ISO 8601 format"
+    )
 
 
 class TimingInfo(RompyBaseModel):
