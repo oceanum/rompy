@@ -116,6 +116,22 @@ class TestModelRunPydanticIntegration:
                 model_run, config=config, workspace_dir=None
             )
 
+    def test_run_converts_path_workspace_dir_to_string(self, model_run, tmp_path):
+        """Test Path workspace_dir is normalized to string in ModelRunResult."""
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="echo test",
+            working_dir=output_dir,
+        )
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+            result = model_run.run(backend=config, workspace_dir=output_dir)
+
+        assert result.success is True
+        assert result.workspace_dir == str(output_dir)
+
     def test_run_with_invalid_backend_type(self, model_run):
         """Test ModelRun.run() returns failure result for invalid backend types."""
         # Invalid types should return ModelRunResult with success=False (not raise)

@@ -393,6 +393,7 @@ class ModelRun(RompyBaseModel):
 
             # Determine output/workspace directories
             output_dir_str = str(self.output_dir) if self.output_dir else None
+            workspace_dir_str = str(workspace_dir) if workspace_dir else None
             backend_class_name = type(backend).__name__.replace("Config", "")
             artifacts = []
             if success and output_dir_str:
@@ -403,7 +404,7 @@ class ModelRun(RompyBaseModel):
                 run_id=self.run_id,
                 backend_used=backend_class_name,
                 output_dir=output_dir_str,
-                workspace_dir=workspace_dir,
+                workspace_dir=workspace_dir_str,
                 artifacts=artifacts,
                 message=(
                     "Model execution completed successfully"
@@ -421,6 +422,8 @@ class ModelRun(RompyBaseModel):
 
         except Exception as e:
             # Wrap any exceptions in ModelRunResult
+            workspace_dir_str = str(workspace_dir) if workspace_dir else None
+
             return ModelRunResult(
                 success=False,
                 run_id=self.run_id,
@@ -430,7 +433,7 @@ class ModelRun(RompyBaseModel):
                     else "unknown"
                 ),
                 output_dir=str(self.output_dir) if self.output_dir else None,
-                workspace_dir=workspace_dir,
+                workspace_dir=workspace_dir_str,
                 error=str(e),
                 message=f"Model execution failed with exception: {str(e)}",
                 timing=TimingInfo(
