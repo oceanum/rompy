@@ -5,7 +5,12 @@ from unittest.mock import patch
 import pytest
 
 from rompy.core.config import BaseConfig
-from rompy.core.responses import Artifact, ArtifactType, PostprocessSuccess
+from rompy.core.responses import (
+    Artifact,
+    ArtifactType,
+    PostprocessFailure,
+    PostprocessSuccess,
+)
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 from rompy.postprocess import NoopPostprocessor
@@ -65,7 +70,7 @@ def test_validate_outputs_warns_for_missing_expected_artifact(tmp_path):
     )
 
 
-def test_noop_postprocessor_delegates_to_config_validate_outputs(tmp_path):
+def test_noop_postprocessor_discovers_files_without_config(tmp_path):
     model_run = ModelRun(
         run_id="test_run",
         period=TimeRange(
@@ -79,23 +84,57 @@ def test_noop_postprocessor_delegates_to_config_validate_outputs(tmp_path):
 
     check_dir = tmp_path / model_run.run_id
     check_dir.mkdir(parents=True, exist_ok=True)
-
-    delegated_artifacts = [
-        Artifact(
-            path=str(check_dir / "from_delegate.txt"),
-            artifact_type=ArtifactType.TEXT,
-            size_bytes=12,
-        )
-    ]
+    (check_dir / "output1.txt").write_text("test content 1")
+    (check_dir / "output2.nc").write_text("test content 2")
 
     processor = NoopPostprocessor()
-    with patch.object(
-        DemoConfig, "validate_outputs", return_value=delegated_artifacts
-    ) as mock_validate:
-        result = processor.process(model_run, validate_outputs=True)
+    result = processor.process(model_run, validate_outputs=True)
 
     assert isinstance(result, PostprocessSuccess)
     assert result.success is True
-    assert result.artifacts == delegated_artifacts
-    assert result.file_count == len(delegated_artifacts)
-    mock_validate.assert_called_once_with(check_dir)
+    assert len(result.artifacts) == 2
+    assert result.file_count == 2
+    assert all(isinstance(artifact, Artifact) for artifact in result.artifacts)
+    artifact_names = {Path(a.path).name for a in result.artifacts}
+    assert artifact_names == {"output1.txt", "output2.nc"}
+    assert all(a.size_bytes is not None for a in result.artifacts)
+
+
+def test_noop_postprocessor_with_duck_typed_model_run(tmp_path):
+    class MinimalModelRun:
+        run_id = "test-run"
+        output_dir = str(tmp_path)
+
+    minimal_model = MinimalModelRun()
+
+    check_dir = tmp_path / minimal_model.run_id
+    check_dir.mkdir(parents=True, exist_ok=True)
+    (check_dir / "output1.txt").write_text("test content 1")
+    (check_dir / "output2.nc").write_text("test content 2")
+
+    processor = NoopPostprocessor()
+    result = processor.process(minimal_model, validate_outputs=True)
+
+    assert isinstance(result, PostprocessSuccess)
+    assert result.success is True
+    assert result.run_id == "test-run"
+    assert result.validated is True
+    assert isinstance(result.artifacts, list)
+    assert len(result.artifacts) == 2
+    assert all(isinstance(artifact, Artifact) for artifact in result.artifacts)
+    assert result.file_count == 2
+
+
+def test_noop_postprocessor_with_missing_output_directory(tmp_path):
+    class MinimalModelRun:
+        run_id = "nonexistent-run"
+        output_dir = str(tmp_path)
+
+    minimal_model = MinimalModelRun()
+
+    processor = NoopPostprocessor()
+    result = processor.process(minimal_model, validate_outputs=True)
+
+    assert isinstance(result, PostprocessFailure)
+    assert result.success is False
+    assert "not found" in result.error

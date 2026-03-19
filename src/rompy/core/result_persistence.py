@@ -224,8 +224,10 @@ def load_generate_result(path_or_dir: Path) -> GenerateResultSidecar:
 
     # Validate schema_version
     version = raw.get("schema_version")
-    if version != 1:
-        raise ValueError(f"Unsupported schema_version: {version} (expected 1) in {p}")
+    if version not in (1, 2):
+        raise ValueError(
+            f"Unsupported schema_version: {version} (expected 1 or 2) in {p}"
+        )
 
     # Validate kind field
     kind = raw.get("kind")
@@ -263,8 +265,10 @@ def load_run_result(path_or_dir: Path) -> RunResultSidecar:
 
     # Validate schema_version
     version = raw.get("schema_version")
-    if version != 1:
-        raise ValueError(f"Unsupported schema_version: {version} (expected 1) in {p}")
+    if version not in (1, 2):
+        raise ValueError(
+            f"Unsupported schema_version: {version} (expected 1 or 2) in {p}"
+        )
 
     # Validate kind field
     kind = raw.get("kind")

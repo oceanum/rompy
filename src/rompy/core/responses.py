@@ -58,6 +58,49 @@ from pydantic import Field, computed_field
 from rompy.core.types import RompyBaseModel
 
 
+class NormalizedContext(RompyBaseModel):
+    """Normalized execution context for sidecar chaining.
+
+    Provides a standardized contract for passing execution context between
+    pipeline stages and across plugin boundaries. All core fields are plugin-agnostic;
+    plugin-specific data should be stored in the extensions dictionary.
+
+    Attributes:
+        model_type: Model type identifier (e.g., "ww3", "swan")
+        period_start: Start of the modelling period (UTC)
+        period_end: End of the modelling period (UTC)
+        output_dir: Model output directory path
+        staging_dir: Local staging directory path
+        config_hash: SHA256 hash of generated file contents
+        extensions: Plugin-specific extension data (extensible dict)
+
+    Examples:
+        ::
+
+            from datetime import datetime, timezone
+
+            context = NormalizedContext(
+                model_type="ww3",
+                period_start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                period_end=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                output_dir="/path/to/output",
+                staging_dir="/path/to/staging",
+                config_hash="abc123...",
+                extensions={"ww3_version": "6.07.1"}
+            )
+    """
+
+    model_type: str = Field(..., description="Model type identifier")
+    period_start: datetime = Field(..., description="Start of the modelling period")
+    period_end: datetime = Field(..., description="End of the modelling period")
+    output_dir: str = Field(..., description="Model output directory")
+    staging_dir: str = Field(..., description="Local staging directory")
+    config_hash: str = Field(..., description="SHA256 hash of generated file contents")
+    extensions: Dict[str, Any] = Field(
+        default_factory=dict, description="Plugin-specific extension data"
+    )
+
+
 class PipelineStage(str, Enum):
     """Pipeline execution stages.
 
@@ -498,7 +541,7 @@ class GenerateResultSidecar(RompyBaseModel):
         default="generate_result", description="Discriminator for sidecar type"
     )
     schema_version: int = Field(
-        default=1, description="Schema version for compatibility tracking"
+        default=2, description="Schema version for compatibility tracking"
     )
     created_at: datetime = Field(
         ..., description="Timestamp when sidecar was created (UTC)"
@@ -513,6 +556,9 @@ class GenerateResultSidecar(RompyBaseModel):
     )
     success: bool = Field(..., description="Whether operation succeeded")
     error: Optional[str] = Field(None, description="Error message if success=False")
+    normalized_context: Optional[NormalizedContext] = Field(
+        None, description="Normalized execution context for sidecar chaining"
+    )
     payload: GenerateResult = Field(..., description="The actual GenerateResult data")
 
 
@@ -554,7 +600,7 @@ class RunResultSidecar(RompyBaseModel):
         default="run_result", description="Discriminator for sidecar type"
     )
     schema_version: int = Field(
-        default=1, description="Schema version for compatibility tracking"
+        default=2, description="Schema version for compatibility tracking"
     )
     created_at: datetime = Field(
         ..., description="Timestamp when sidecar was created (UTC)"
@@ -569,6 +615,9 @@ class RunResultSidecar(RompyBaseModel):
     )
     success: bool = Field(..., description="Whether operation succeeded")
     error: Optional[str] = Field(None, description="Error message if success=False")
+    normalized_context: Optional[NormalizedContext] = Field(
+        None, description="Normalized execution context for sidecar chaining"
+    )
     payload: ModelRunResult = Field(..., description="The actual ModelRunResult data")
 
 

@@ -12,6 +12,7 @@ import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 import click
@@ -28,6 +29,46 @@ logger = get_logger(__name__)
 
 # Get installed entry points
 installed = importlib.metadata.entry_points(group="rompy.config").names
+
+
+def _build_postprocess_model_run_from_sidecar(run_result_sidecar):
+    """Build a minimal ModelRun for sidecar-driven postprocessing."""
+    staging_dir = Path(run_result_sidecar.staging_dir)
+    model_run = ModelRun(
+        run_id=run_result_sidecar.run_id,
+        output_dir=staging_dir.parent,
+        run_id_subdir=True,
+    )
+    model_run._staging_dir = staging_dir
+    return model_run
+
+
+def _build_postprocess_processor_input(run_result_sidecar):
+    payload = run_result_sidecar.payload
+    payload_fields = payload.__class__.model_fields.keys()
+    payload_data = {field: getattr(payload, field) for field in payload_fields}
+    staging_dir = Path(run_result_sidecar.staging_dir)
+    normalized_artifacts = []
+    for artifact in payload.artifacts:
+        artifact_path = Path(artifact.path)
+        try:
+            normalized_path = artifact_path.relative_to(staging_dir)
+        except ValueError:
+            normalized_path = artifact_path
+        resolved_path = normalized_path
+        if not resolved_path.is_absolute():
+            resolved_path = staging_dir / resolved_path
+        if not resolved_path.exists():
+            continue
+        normalized_artifacts.append(
+            artifact.model_copy(update={"path": str(normalized_path)})
+        )
+    payload_data["output_dir"] = str(staging_dir)
+    payload_data["artifacts"] = normalized_artifacts
+    return SimpleNamespace(
+        **payload_data,
+        normalized_context=run_result_sidecar.normalized_context,
+    )
 
 
 def configure_logging(
@@ -255,8 +296,15 @@ def cli(ctx):
 @click.option(
     "--backend-config",
     type=click.Path(exists=True),
-    required=True,
+    required=False,
     help="YAML/JSON file with backend configuration",
+)
+@click.option(
+    "--generate-result",
+    "generate_result_path",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to generate_result.json sidecar (optional, sidecar-driven run)",
 )
 @click.option("--dry-run", is_flag=True, help="Generate inputs only, don't run")
 @click.option(
@@ -274,6 +322,7 @@ def cli(ctx):
 def run(
     config,
     backend_config,
+    generate_result_path,
     dry_run,
     skip_generate,
     json_output,
@@ -310,43 +359,97 @@ def run(
 
     if config_from_env and config:
         raise click.UsageError("Cannot specify both config file and --config-from-env")
-    if not config_from_env and not config:
-        raise click.UsageError("Must specify either config file or --config-from-env")
+    # Allow sidecar-driven runs: require either config, env config, or generate-result
+    if not config_from_env and not config and not generate_result_path:
+        raise click.UsageError(
+            "Must specify either config file, --config-from-env, or --generate-result"
+        )
 
     try:
-        config_data = load_config(config, from_env=config_from_env)
-        model_run = ModelRun(**config_data)
+        # Sidecar-driven flow
+        if generate_result_path:
+            from rompy.core.result_persistence import load_generate_result
 
-        logger.info(f"Running model: {model_run.config.model_type}")
-        logger.info(f"Run ID: {model_run.run_id}")
+            try:
+                generate_result = load_generate_result(generate_result_path)
+            except FileNotFoundError:
+                raise click.UsageError(
+                    f"Generate result sidecar not found: {generate_result_path}"
+                )
 
-        backend_cfg = _load_backend_config(backend_config)
+            # v1 sidecar upgrade check
+            if generate_result.normalized_context is None:
+                raise ValueError(
+                    "Generate result sidecar is v1 and missing normalized_context. "
+                    "Re-run 'rompy generate' to generate a v2 sidecar with normalized_context."
+                )
 
-        start_time = datetime.now()
+            # Build minimal ModelRun from normalized_context
+            ctx = generate_result.normalized_context
+            staging = Path(ctx.staging_dir)
+            model_run = ModelRun(
+                run_id=generate_result.run_id,
+                output_dir=Path(ctx.output_dir),
+                run_id_subdir=True,
+            )
+            model_run._staging_dir = staging
 
-        if skip_generate:
+            if not backend_config:
+                raise click.UsageError(
+                    "--backend-config is required when using --generate-result"
+                )
+
+            backend_cfg = _load_backend_config(backend_config)
+            start_time = datetime.now()
+
             staging_dir = str(model_run.staging_dir)
-            staging_path = Path(staging_dir)
-            if not staging_path.exists():
-                raise click.UsageError(
-                    f"Workspace does not exist: {staging_dir}\n"
-                    f"Run 'rompy generate {config or '<config>'}' first or remove --skip-generate"
-                )
-            if not list(staging_path.glob("*")):
-                raise click.UsageError(
-                    f"Workspace exists but is empty: {staging_dir}\n"
-                    f"Run 'rompy generate {config or '<config>'}' first or remove --skip-generate"
-                )
-            logger.info(f"Using existing workspace: {staging_dir}")
+
+            if dry_run:
+                logger.info("Dry run mode - skipping model execution")
+                return
+
+            result = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
+
+        # Config-driven flow (existing behaviour)
         else:
-            staging_dir = model_run.generate()
-            logger.info(f"Inputs generated in: {staging_dir}")
+            config_data = load_config(config, from_env=config_from_env)
+            model_run = ModelRun(**config_data)
 
-        if dry_run:
-            logger.info("Dry run mode - skipping model execution")
-            return
+            logger.info(f"Running model: {model_run.config.model_type}")
+            logger.info(f"Run ID: {model_run.run_id}")
 
-        result = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
+            if not backend_config:
+                raise click.UsageError(
+                    "--backend-config is required when running from config"
+                )
+
+            backend_cfg = _load_backend_config(backend_config)
+
+            start_time = datetime.now()
+
+            if skip_generate:
+                staging_dir = str(model_run.staging_dir)
+                staging_path = Path(staging_dir)
+                if not staging_path.exists():
+                    raise click.UsageError(
+                        f"Workspace does not exist: {staging_dir}\n"
+                        f"Run 'rompy generate {config or '<config>'}' first or remove --skip-generate"
+                    )
+                if not list(staging_path.glob("*")):
+                    raise click.UsageError(
+                        f"Workspace exists but is empty: {staging_dir}\n"
+                        f"Run 'rompy generate {config or '<config>'}' first or remove --skip-generate"
+                    )
+                logger.info(f"Using existing workspace: {staging_dir}")
+            else:
+                staging_dir = model_run.generate()
+                logger.info(f"Inputs generated in: {staging_dir}")
+
+            if dry_run:
+                logger.info("Dry run mode - skipping model execution")
+                return
+
+            result = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
 
         elapsed = datetime.now() - start_time
         if result.success:
@@ -740,7 +843,8 @@ def postprocess(
 ):
     """Run postprocessing on model outputs using the specified postprocessor.
 
-    Requires run_result.json in the staging directory (written by 'rompy run').
+    Requires run_result.json from a prior 'rompy run'.
+    Provide either a model config file or --run-result PATH.
     Use --run-result PATH to specify an explicit sidecar location.
     Use --force to reprocess even if run_result.json shows success=false,
       or to reprocess even if postprocessing already completed.
@@ -748,12 +852,12 @@ def postprocess(
     Use --json to emit the sidecar JSON to stdout.
 
     Examples:
-        # Fail-fast: missing run result
+        # Config-first: auto-discover from staging dir
         rompy postprocess config.yml --processor-config processor.yml
         # (exits 1 if run_result.json not found in staging dir)
 
-        # Explicit sidecar path
-        rompy postprocess config.yml --processor-config processor.yml --run-result /path/to/run_result.json
+        # Sidecar-only: explicit run result path
+        rompy postprocess --run-result /path/to/run_result.json --processor-config processor.yml
 
         # Force rerun
         rompy postprocess config.yml --processor-config processor.yml --force
@@ -766,22 +870,18 @@ def postprocess(
     # Validate config source
     if config_from_env and config:
         raise click.UsageError("Cannot specify both config file and --config-from-env")
-    if not config_from_env and not config:
-        raise click.UsageError("Must specify either config file or --config-from-env")
+    if config_from_env and run_result_path:
+        raise click.UsageError("Cannot use both --config-from-env and --run-result")
+    if not config_from_env and not config and not run_result_path:
+        raise click.UsageError(
+            "Must specify either config file, --config-from-env, or --run-result"
+        )
 
     try:
-        # Load configuration
-        config_data = load_config(config, from_env=config_from_env)
-        model_run = ModelRun(**config_data)
-
         # Load processor configuration
         from rompy.postprocess.config import _load_processor_config
 
         processor_cfg = _load_processor_config(processor_config)
-
-        logger.info(f"Running postprocessing for: {model_run.config.model_type}")
-        logger.info(f"Run ID: {model_run.run_id}")
-        logger.info(f"Postprocessor: {processor_cfg.type}")
 
         from pathlib import Path
         from rompy.core.result_persistence import (
@@ -793,6 +893,8 @@ def postprocess(
         if run_result_path:
             sidecar_path = Path(run_result_path)
         else:
+            config_data = load_config(config, from_env=config_from_env)
+            model_run = ModelRun(**config_data)
             sidecar_path = model_run.staging_dir / "run_result.json"
 
         logger.info(f"Loading run result from: {sidecar_path}")
@@ -816,6 +918,21 @@ def postprocess(
                 )
 
             sys.exit(1)
+
+        # If user provided an explicit run_result sidecar, validate upgrade and build
+        # a minimal ModelRun from the normalized_context. Wrap upgrade check in
+        # try/except so we can report a clear error for v1 sidecars.
+        try:
+            if run_result_path:
+                if run_result.normalized_context is None:
+                    raise ValueError(
+                        "Run result sidecar is v1 and missing normalized_context. "
+                        "Re-run 'rompy run' to generate a v2 sidecar with normalized_context."
+                    )
+                model_run = _build_postprocess_model_run_from_sidecar(run_result)
+                processor_input = _build_postprocess_processor_input(run_result)
+            else:
+                processor_input = None
         except ValueError as e:
             logger.error(f"❌ Invalid run result sidecar: {e}")
 
@@ -827,6 +944,13 @@ def postprocess(
                 )
 
             sys.exit(1)
+
+        logger.info(
+            "Running postprocessing for: %s",
+            getattr(getattr(model_run, "config", None), "model_type", "sidecar"),
+        )
+        logger.info(f"Run ID: {model_run.run_id}")
+        logger.info(f"Postprocessor: {processor_cfg.type}")
 
         if not run_result.success and not force:
             logger.error(
@@ -892,7 +1016,8 @@ def postprocess(
         start_time = datetime.now()
         results = model_run.postprocess(
             processor=processor_cfg,
-            output_dir=output_dir,
+            processor_input=processor_input,
+            output_dir=output_dir or str(model_run.staging_dir),
             validate_outputs=validate_outputs,
         )
         elapsed = datetime.now() - start_time

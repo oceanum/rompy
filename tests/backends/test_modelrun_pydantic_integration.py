@@ -414,6 +414,36 @@ class TestModelRunPydanticIntegration:
         assert result.artifacts == discovered
         mock_validate.assert_called_once_with(str(model_run.output_dir))
 
+    def test_run_success_normalizes_artifact_paths_to_run_output_dir(
+        self, model_run, tmp_path
+    ):
+        output_root = tmp_path / "outputs"
+        run_output_dir = output_root / model_run.run_id
+        run_output_dir.mkdir(parents=True, exist_ok=True)
+
+        config = LocalConfig(
+            command="echo test",
+            working_dir=run_output_dir,
+        )
+        discovered = [
+            Artifact(path=str(run_output_dir / "result.nc")),
+            Artifact(path=str(run_output_dir / "nested" / "plot.png")),
+        ]
+        model_run.output_dir = output_root
+
+        with patch("rompy.model.ModelRun.generate", return_value=str(run_output_dir)):
+            with patch.object(
+                DemoConfig, "validate_outputs", return_value=discovered
+            ) as mock_validate:
+                result = model_run.run(backend=config)
+
+        assert result.success is True
+        assert [artifact.path for artifact in result.artifacts] == [
+            "result.nc",
+            "nested/plot.png",
+        ]
+        mock_validate.assert_called_once_with(str(run_output_dir))
+
     def test_run_failure_does_not_validate_outputs(self, model_run, tmp_path):
         """Test failed run does not call config.validate_outputs()."""
         output_dir = tmp_path / model_run.run_id

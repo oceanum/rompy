@@ -5,6 +5,7 @@ Tests that generate() writes generate_result.json sidecar with:
 - Failure case: sidecar with success=False (if staging_dir is resolved)
 - File discovery: generated_files contains actual files in staging_dir
 - Atomic write: sidecar persisted via result_persistence helpers
+- NormalizedContext: populated in both success and failure paths
 """
 
 import json
@@ -54,7 +55,7 @@ def test_generate_writes_sidecar_on_success(tmp_model_run):
         assert sidecar.staging_dir == str(result_path)
         assert sidecar.status == "success"
         assert sidecar.kind == "generate_result"
-        assert sidecar.schema_version == 1
+        assert sidecar.schema_version == 2
 
         assert sidecar.payload.success is True
         assert sidecar.payload.staging_dir == str(result_path)
@@ -140,7 +141,7 @@ def test_generate_sidecar_json_structure(tmp_model_run):
         assert "kind" in raw_json
         assert raw_json["kind"] == "generate_result"
         assert "schema_version" in raw_json
-        assert raw_json["schema_version"] == 1
+        assert raw_json["schema_version"] == 2
         assert "created_at" in raw_json
         assert "run_id" in raw_json
         assert "staging_dir" in raw_json
@@ -202,3 +203,119 @@ def test_generate_multiple_calls_overwrites_sidecar(tmp_model_run):
 
         assert "test1.txt" in sidecar2.payload.generated_files
         assert "test2.txt" in sidecar2.payload.generated_files
+
+
+def test_generate_sidecar_has_normalized_context_success(tmp_model_run):
+    """Test that success-path sidecar contains populated NormalizedContext."""
+    with patch.object(tmp_model_run.config.__class__, "render", return_value=None):
+        staging_dir = tmp_model_run.staging_dir
+        (staging_dir / "config.nml").write_text("test config")
+        (staging_dir / "input.dat").write_text("test data")
+
+        tmp_model_run.generate()
+
+        sidecar = load_generate_result(staging_dir)
+
+        assert sidecar.normalized_context is not None
+        assert sidecar.normalized_context.model_type == "base"
+        assert sidecar.normalized_context.period_start == datetime(2020, 1, 1, 0, 0, 0)
+        assert sidecar.normalized_context.period_end == datetime(2020, 1, 2, 0, 0, 0)
+        assert sidecar.normalized_context.output_dir == str(tmp_model_run.output_dir)
+        assert sidecar.normalized_context.staging_dir == str(staging_dir)
+        assert sidecar.normalized_context.config_hash != ""
+        assert len(sidecar.normalized_context.config_hash) == 64
+        assert sidecar.normalized_context.extensions == {}
+
+
+def test_generate_sidecar_has_normalized_context_failure(tmp_model_run):
+    """Test that failure-path sidecar contains NormalizedContext when staging_dir exists."""
+    with patch.object(
+        tmp_model_run.config.__class__,
+        "render",
+        side_effect=RuntimeError("Render failed"),
+    ):
+        staging_dir = tmp_model_run.staging_dir
+
+        with pytest.raises(RuntimeError, match="Render failed"):
+            tmp_model_run.generate()
+
+        sidecar = load_generate_result(staging_dir)
+
+        assert sidecar.normalized_context is not None
+        assert sidecar.normalized_context.model_type == "base"
+        assert sidecar.normalized_context.period_start == datetime(2020, 1, 1, 0, 0, 0)
+        assert sidecar.normalized_context.period_end == datetime(2020, 1, 2, 0, 0, 0)
+        assert sidecar.normalized_context.output_dir == str(tmp_model_run.output_dir)
+        assert sidecar.normalized_context.staging_dir == str(staging_dir)
+        assert sidecar.normalized_context.config_hash == ""
+        assert sidecar.normalized_context.extensions == {}
+
+
+def test_generate_config_hash_deterministic(tmp_model_run):
+    """Test that config_hash is deterministic for same files."""
+    with patch.object(tmp_model_run.config.__class__, "render", return_value=None):
+        staging_dir = tmp_model_run.staging_dir
+        (staging_dir / "file1.txt").write_text("content1")
+        (staging_dir / "file2.txt").write_text("content2")
+
+        tmp_model_run.generate()
+        sidecar1 = load_generate_result(staging_dir)
+        hash1 = sidecar1.normalized_context.config_hash
+
+        (staging_dir / "file1.txt").write_text("content1")
+        (staging_dir / "file2.txt").write_text("content2")
+
+        tmp_model_run.generate()
+        sidecar2 = load_generate_result(staging_dir)
+        hash2 = sidecar2.normalized_context.config_hash
+
+        assert hash1 == hash2
+
+
+def test_generate_config_hash_changes_with_content(tmp_model_run):
+    """Test that config_hash changes when file contents change."""
+    with patch.object(tmp_model_run.config.__class__, "render", return_value=None):
+        staging_dir = tmp_model_run.staging_dir
+        (staging_dir / "file1.txt").write_text("content1")
+
+        tmp_model_run.generate()
+        sidecar1 = load_generate_result(staging_dir)
+        hash1 = sidecar1.normalized_context.config_hash
+
+        (staging_dir / "file1.txt").write_text("modified content")
+
+        tmp_model_run.generate()
+        sidecar2 = load_generate_result(staging_dir)
+        hash2 = sidecar2.normalized_context.config_hash
+
+        assert hash1 != hash2
+
+
+def test_generate_sidecar_uses_config_normalized_extensions(tmp_path):
+    class ExtensionConfig(BaseConfig):
+        def get_normalized_extensions(self):
+            return {
+                "ww3": {"restart_stride_seconds": 3600, "config_variant": "ww3shel"}
+            }
+
+    model_run = ModelRun(
+        run_id="test-generate-ext",
+        period=TimeRange(
+            start=datetime(2020, 1, 1, 0, 0, 0),
+            end=datetime(2020, 1, 2, 0, 0, 0),
+            interval="1H",
+        ),
+        output_dir=tmp_path / "output",
+        config=ExtensionConfig(),
+    )
+
+    with patch.object(ExtensionConfig, "render", return_value=None):
+        staging_dir = model_run.staging_dir
+        (staging_dir / "config.nml").write_text("test config")
+
+        model_run.generate()
+
+    sidecar = load_generate_result(staging_dir)
+    assert sidecar.normalized_context.extensions == {
+        "ww3": {"restart_stride_seconds": 3600, "config_variant": "ww3shel"}
+    }

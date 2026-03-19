@@ -723,7 +723,7 @@ class TestGenerateResultSidecar:
         )
 
         assert sidecar.kind == "generate_result"
-        assert sidecar.schema_version == 1
+        assert sidecar.schema_version == 2
         assert sidecar.created_at == now
         assert sidecar.updated_at is None
         assert sidecar.run_id == "run-123"
@@ -801,7 +801,7 @@ class TestRunResultSidecar:
         )
 
         assert sidecar.kind == "run_result"
-        assert sidecar.schema_version == 1
+        assert sidecar.schema_version == 2
         assert sidecar.run_id == "run-789"
         assert sidecar.status == "success"
         assert sidecar.success is True
@@ -833,7 +833,7 @@ class TestRunResultSidecar:
         data = json.loads(json_str)
 
         assert data["kind"] == "run_result"
-        assert data["schema_version"] == 1
+        assert data["schema_version"] == 2
         assert data["run_id"] == "run-abc"
         assert data["status"] == "success"
         assert data["success"] is True

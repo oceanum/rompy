@@ -5,13 +5,14 @@ This module provides the ModelRun class which is the main entry point for
 running models with ROMPY.
 """
 
+import hashlib
 import os
 import platform
 import shutil
 import zipfile as zf
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 from pydantic import Field
 
@@ -22,6 +23,7 @@ from rompy.core.responses import (
     GenerateResult,
     GenerateResultSidecar,
     ModelRunResult,
+    NormalizedContext,
     PipelineResult,
     PostprocessFailure,
     PostprocessResult,
@@ -144,6 +146,31 @@ class ModelRun(RompyBaseModel):
             _generated_by=os.environ.get("USER"),
             _generated_on=platform.node(),
         )
+
+    def _compute_config_hash(self, staging_dir: Path) -> str:
+        """Compute SHA256 hash of all files in staging_dir.
+
+        Files are sorted by path to ensure deterministic hash.
+        Returns empty string if no files exist or on any IO error.
+        """
+        try:
+            from rompy.core.result_persistence import GENERATE_RESULT_FILENAME
+
+            files = sorted(staging_dir.iterdir(), key=lambda f: str(f))
+            files = [
+                f for f in files if f.is_file() and f.name != GENERATE_RESULT_FILENAME
+            ]
+
+            if not files:
+                return ""
+
+            hasher = hashlib.sha256()
+            for file_path in files:
+                hasher.update(file_path.read_bytes())
+
+            return hasher.hexdigest()
+        except Exception:
+            return ""
 
     def generate(self) -> str:
         """Generate the model input files
@@ -290,6 +317,22 @@ class ModelRun(RompyBaseModel):
                     if f.is_file()
                 ]
 
+                model_type = (
+                    self.config.model_type
+                    if hasattr(self.config, "model_type")
+                    else type(self.config).__name__.lower()
+                )
+
+                normalized_ctx = NormalizedContext(
+                    model_type=model_type,
+                    period_start=self.period.start,
+                    period_end=self.period.end,
+                    output_dir=str(self.output_dir),
+                    staging_dir=str(self.staging_dir),
+                    config_hash=self._compute_config_hash(self.staging_dir),
+                    extensions=self._get_normalized_extensions(),
+                )
+
                 # Build GenerateResult payload
                 generate_result = GenerateResult(
                     generated_at=datetime.now(timezone.utc),
@@ -307,6 +350,7 @@ class ModelRun(RompyBaseModel):
                     status="success",
                     success=True,
                     payload=generate_result,
+                    normalized_context=normalized_ctx,
                 )
 
                 # Write atomically to staging_dir/generate_result.json
@@ -324,6 +368,22 @@ class ModelRun(RompyBaseModel):
                 if self.staging_dir is not None:
                     from rompy.core.result_persistence import write_generate_result
 
+                    model_type = (
+                        self.config.model_type
+                        if hasattr(self.config, "model_type")
+                        else type(self.config).__name__.lower()
+                    )
+
+                    normalized_ctx = NormalizedContext(
+                        model_type=model_type,
+                        period_start=self.period.start,
+                        period_end=self.period.end,
+                        output_dir=str(self.output_dir),
+                        staging_dir=str(self.staging_dir),
+                        config_hash="",
+                        extensions=self._get_normalized_extensions(),
+                    )
+
                     failure_sidecar = GenerateResultSidecar(
                         created_at=datetime.now(timezone.utc),
                         run_id=self.run_id,
@@ -339,6 +399,7 @@ class ModelRun(RompyBaseModel):
                             generated_files=[],
                             error=str(e),
                         ),
+                        normalized_context=normalized_ctx,
                     )
                     write_generate_result(self.staging_dir, failure_sidecar)
             except Exception:
@@ -399,6 +460,67 @@ class ModelRun(RompyBaseModel):
     def __call__(self):
         return self.generate()
 
+    def _get_normalized_extensions(self) -> Dict[str, Any]:
+        get_extensions = getattr(self.config, "get_normalized_extensions", None)
+        if callable(get_extensions):
+            try:
+                extensions = get_extensions()
+                if isinstance(extensions, dict):
+                    return extensions
+            except Exception:
+                pass
+        return {}
+
+    def _compute_run_normalized_context(
+        self, workspace_dir: Optional[str]
+    ) -> NormalizedContext:
+        """Compute normalized context for run sidecars.
+
+        Tries to copy normalized_context from generate_result.json if present,
+        otherwise computes fallback from model fields.
+
+        Args:
+            workspace_dir: Workspace directory path (may be None)
+
+        Returns:
+            NormalizedContext for inclusion in RunResultSidecar
+        """
+        normalized_ctx = None
+
+        # Try to copy from generate_result.json if workspace exists
+        if workspace_dir:
+            try:
+                from rompy.core.result_persistence import load_generate_result
+
+                gen_result = load_generate_result(Path(workspace_dir))
+                if gen_result.normalized_context is not None:
+                    normalized_ctx = gen_result.normalized_context
+            except (FileNotFoundError, Exception):
+                pass
+
+        # Fallback: compute from model fields if not found or no workspace
+        if normalized_ctx is None:
+            model_type = (
+                self.config.model_type
+                if hasattr(self.config, "model_type")
+                else type(self.config).__name__.lower()
+            )
+            normalized_ctx = NormalizedContext(
+                model_type=model_type,
+                period_start=self.period.start,
+                period_end=self.period.end,
+                output_dir=str(self.output_dir) if self.output_dir else "",
+                staging_dir=str(workspace_dir) if workspace_dir else "",
+                config_hash=(
+                    self._compute_config_hash(Path(workspace_dir))
+                    if workspace_dir
+                    else ""
+                ),
+                extensions=self._get_normalized_extensions(),
+            )
+
+        return normalized_ctx
+
     def run(
         self, backend: BackendConfig, workspace_dir: Optional[str] = None
     ) -> ModelRunResult:
@@ -457,6 +579,8 @@ class ModelRun(RompyBaseModel):
                     from rompy.core.result_persistence import write_run_result
                     from rompy.core.responses import RunResultSidecar
 
+                    normalized_ctx = self._compute_run_normalized_context(workspace_dir)
+
                     sidecar = RunResultSidecar(
                         created_at=datetime.now(timezone.utc),
                         run_id=result.run_id,
@@ -464,6 +588,7 @@ class ModelRun(RompyBaseModel):
                         status="failed",
                         success=False,
                         error=result.error,
+                        normalized_context=normalized_ctx,
                         payload=result,
                     )
                     try:
@@ -484,12 +609,35 @@ class ModelRun(RompyBaseModel):
             )
 
             # Determine output/workspace directories
-            output_dir_str = str(self.output_dir) if self.output_dir else None
+            output_dir_path = None
+            if self.output_dir:
+                output_dir_path = Path(self.output_dir)
+                if self.run_id_subdir:
+                    output_dir_path = output_dir_path / self.run_id
+            output_dir_str = str(output_dir_path) if output_dir_path else None
             workspace_dir_str = str(workspace_dir) if workspace_dir else None
             backend_class_name = type(backend).__name__.replace("Config", "")
             artifacts = []
             if success and output_dir_str:
                 artifacts = self.config.validate_outputs(output_dir_str)
+                normalized_artifacts = []
+                output_dir_base = Path(output_dir_str)
+                for artifact in artifacts:
+                    artifact_path = Path(artifact.path)
+                    if artifact_path.is_absolute():
+                        try:
+                            normalized_path = artifact_path.relative_to(output_dir_base)
+                        except ValueError:
+                            normalized_path = artifact_path
+                    else:
+                        try:
+                            normalized_path = artifact_path.relative_to(output_dir_base)
+                        except ValueError:
+                            normalized_path = artifact_path
+                    normalized_artifacts.append(
+                        artifact.model_copy(update={"path": str(normalized_path)})
+                    )
+                artifacts = normalized_artifacts
 
             result = ModelRunResult(
                 success=success,
@@ -517,6 +665,8 @@ class ModelRun(RompyBaseModel):
                 from rompy.core.result_persistence import write_run_result
                 from rompy.core.responses import RunResultSidecar
 
+                normalized_ctx = self._compute_run_normalized_context(workspace_dir)
+
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     run_id=result.run_id,
@@ -524,6 +674,7 @@ class ModelRun(RompyBaseModel):
                     status="success" if result.success else "failed",
                     success=result.success,
                     error=result.error,
+                    normalized_context=normalized_ctx,
                     payload=result,
                 )
                 try:
@@ -561,6 +712,8 @@ class ModelRun(RompyBaseModel):
                 from rompy.core.result_persistence import write_run_result
                 from rompy.core.responses import RunResultSidecar
 
+                normalized_ctx = self._compute_run_normalized_context(workspace_dir)
+
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     run_id=result.run_id,
@@ -568,6 +721,7 @@ class ModelRun(RompyBaseModel):
                     status="failed",
                     success=False,
                     error=result.error,
+                    normalized_context=normalized_ctx,
                     payload=result,
                 )
                 try:
@@ -578,7 +732,12 @@ class ModelRun(RompyBaseModel):
 
             return result
 
-    def postprocess(self, processor, **kwargs) -> PostprocessResult:
+    def postprocess(
+        self,
+        processor,
+        processor_input=None,
+        **kwargs,
+    ) -> PostprocessResult:
         """
         Postprocess the model outputs using the specified processor configuration.
 
@@ -648,8 +807,8 @@ class ModelRun(RompyBaseModel):
             # Merge with any user-provided kwargs (kwargs take precedence)
             processor_fields.update(kwargs)
 
-            # Processor returns PostprocessResult directly
-            result = processor_instance.process(self, **processor_fields)
+            process_target = processor_input if processor_input is not None else self
+            result = processor_instance.process(process_target, **processor_fields)
 
             # Write postprocess result sidecar
             from rompy.core.result_persistence import write_postprocess_result

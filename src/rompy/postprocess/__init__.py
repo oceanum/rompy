@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from rompy.core.responses import (
+    Artifact,
+    ArtifactType,
     PostprocessFailure,
     PostprocessResult,
     PostprocessSuccess,
@@ -116,7 +118,29 @@ class NoopPostprocessor:
                         ),
                     )
 
-                artifacts = model_run.config.validate_outputs(check_dir)
+                discovered_files = sorted(check_dir.rglob("*"), key=lambda f: str(f))
+
+                ext_map = {
+                    ".yaml": ArtifactType.YAML,
+                    ".yml": ArtifactType.YAML,
+                    ".nc": ArtifactType.NETCDF,
+                    ".png": ArtifactType.PLOT,
+                    ".jpg": ArtifactType.PLOT,
+                    ".jpeg": ArtifactType.PLOT,
+                    ".pdf": ArtifactType.PLOT,
+                    ".svg": ArtifactType.PLOT,
+                    ".txt": ArtifactType.TEXT,
+                }
+
+                artifacts = [
+                    Artifact(
+                        path=str(f),
+                        artifact_type=ext_map.get(f.suffix.lower(), ArtifactType.OTHER),
+                        size_bytes=f.stat().st_size,
+                    )
+                    for f in discovered_files
+                    if f.is_file()
+                ]
                 file_count = len(artifacts)
                 logger.info(f"Found {file_count} output files in {check_dir}")
 

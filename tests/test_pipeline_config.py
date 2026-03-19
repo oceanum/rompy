@@ -394,3 +394,85 @@ class TestBackendConfigRequired:
                 backend_config="local",  # Wrong type
                 processor=processor_config,
             )
+
+
+
+def test_pipeline_sidecar_chaining_happy_path(tmp_path):
+    """Full pipeline completes and sidecars contain normalized_context."""
+    from pathlib import Path
+    from rompy.model import ModelRun
+    from rompy.backends.config import LocalConfig
+    from rompy.postprocess.config import NoopPostprocessorConfig
+    from tests.test_helpers import DemoConfig
+    from rompy.core.result_persistence import load_generate_result, load_run_result
+    from unittest.mock import patch
+
+    model = ModelRun(
+        config=DemoConfig(arg1="foo", arg2="bar"),
+        run_id="pipeline-happy",
+        output_dir=str(tmp_path / "output"),
+    )
+
+    backend = LocalConfig(command="exit 0", timeout=60)
+    processor = NoopPostprocessorConfig()
+
+    # Prevent template rendering from doing IO; generation should still write sidecar
+    with patch.object(model.config.__class__, "render", return_value=None):
+        result = model.pipeline(
+            pipeline_backend="local", backend_config=backend, processor=processor
+        )
+
+    # Pipeline should succeed
+    assert result.success is True
+
+    staging_dir = Path(result.staging_dir)
+
+    # generate_result.json must exist and contain normalized_context
+    gen_sidecar = load_generate_result(staging_dir)
+    assert gen_sidecar.normalized_context is not None
+
+    # run_result.json must exist and contain normalized_context
+    run_sidecar = load_run_result(staging_dir)
+    assert run_sidecar.normalized_context is not None
+
+
+def test_pipeline_failed_run_blocks_postprocess(tmp_path):
+    """When run fails, run_result.json is written and postprocess is NOT attempted."""
+    from pathlib import Path
+    from rompy.model import ModelRun
+    from rompy.backends.config import LocalConfig
+    from rompy.postprocess.config import NoopPostprocessorConfig
+    from tests.test_helpers import DemoConfig
+    from rompy.core.result_persistence import load_run_result
+    from unittest.mock import patch
+    from rompy.core.responses import PipelineStage
+
+    model = ModelRun(
+        config=DemoConfig(arg1="foo", arg2="bar"),
+        run_id="pipeline-fail-run",
+        output_dir=str(tmp_path / "output"),
+    )
+
+    backend = LocalConfig(command="exit 1", timeout=60)
+    processor = NoopPostprocessorConfig()
+
+    # Patch render to avoid template complexity and patch postprocess to detect calls
+    with patch.object(model.config.__class__, "render", return_value=None):
+        with patch.object(ModelRun, "postprocess") as mock_post:
+            result = model.pipeline(
+                pipeline_backend="local", backend_config=backend, processor=processor
+            )
+
+    # Pipeline must indicate failure at RUN stage
+    assert result.success is False
+    assert result.failed_stage == PipelineStage.RUN
+
+    staging_dir = Path(result.staging_dir) if getattr(result, "staging_dir", None) else Path(model.staging_dir)
+
+    # run_result.json must exist even on failure
+    run_sidecar = load_run_result(staging_dir)
+    assert run_sidecar.success is False
+    assert run_sidecar.normalized_context is not None
+
+    # Ensure postprocess was NOT called
+    mock_post.assert_not_called()
