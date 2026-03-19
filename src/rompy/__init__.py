@@ -52,7 +52,6 @@ warnings.filterwarnings(
 __version__ = "2.0.0-alpha"
 
 # Import and re-export formatting utilities
-from .formatting import get_formatted_box, get_formatted_header_footer
 
 # Import logging configuration
 from .logging import LoggingConfig

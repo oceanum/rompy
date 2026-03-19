@@ -101,11 +101,6 @@ def tmp_config_files(tmp_path):
         yaml.dump(processor_config, f)
 
     # Create pipeline config with includes
-    pipeline_config = {
-        "config": f"!include {model_config_path}",
-        "backend": f"!include {backend_config_path}",
-        "postprocessor": f"!include {processor_config_path}",
-    }
 
     pipeline_config_path = tmp_path / "pipeline_config.yml"
     with open(pipeline_config_path, "w") as f:

@@ -76,7 +76,6 @@ class BaseConfig(RompyBaseModel):
         Returns:
             List[Artifact]: Expected artifacts (empty list in base implementation).
         """
-        from rompy.core.responses import Artifact  # local import to avoid circularity
 
         warnings.warn(
             f"{type(self).__name__}.expected_artifacts() is not implemented. "

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Dict, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
-    from . import NoopPostprocessor
+    pass
 
 
 class BasePostprocessorConfig(BaseModel, ABC):
