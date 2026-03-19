@@ -22,7 +22,6 @@ from rompy.run import LocalRunBackend
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
-    ModelRunResult,
     PipelineFailure,
     PipelineStage,
     PipelineSuccess,

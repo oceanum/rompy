@@ -1,9 +1,7 @@
 """Integration test: ModelRun.postprocess() writes postprocess_result.json sidecar."""
 
 import json
-from pathlib import Path
 
-import pytest
 
 from rompy.core.result_persistence import (
     POSTPROCESS_RESULT_FILENAME,

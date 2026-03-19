@@ -1,7 +1,6 @@
 """Integration tests for ModelRun.run() result sidecar persistence."""
 
 import json
-from pathlib import Path
 
 import pytest
 

@@ -581,7 +581,6 @@ class TestSlurmRunBackend:
                 patch.object(backend, "_submit_job") as mock_submit,
                 patch.object(backend, "_wait_for_completion") as mock_wait,
             ):
-
                 # Mock the methods to return expected values
                 mock_create_script.return_value = "/tmp/job_script.sh"
                 mock_submit.return_value = "12345"
@@ -609,7 +608,6 @@ class TestSlurmRunBackend:
                 patch.object(backend, "_create_job_script") as mock_create_script,
                 patch.object(backend, "_submit_job") as mock_submit,
             ):
-
                 # Mock the methods
                 mock_create_script.return_value = "/tmp/job_script.sh"
                 mock_submit.return_value = None  # Submission failed

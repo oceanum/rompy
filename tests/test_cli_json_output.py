@@ -1,6 +1,5 @@
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -21,8 +20,6 @@ from rompy.core.result_persistence import (
     write_run_result,
     write_postprocess_result,
 )
-from rompy.model import ModelRun
-from rompy.postprocess.config import NoopPostprocessorConfig
 
 
 @pytest.fixture

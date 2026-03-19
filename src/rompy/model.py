@@ -11,7 +11,7 @@ import shutil
 import zipfile as zf
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Literal, Optional, Union
 
 from pydantic import Field
 
@@ -244,78 +244,107 @@ class ModelRun(RompyBaseModel):
         )
         logger.info(f"Preparing input files in {self.output_dir}")
 
-        # Collect context data
-        cc_full = {}
-        cc_full["runtime"] = self.model_dump()
-        cc_full["runtime"]["staging_dir"] = self.staging_dir
-        cc_full["runtime"].update(self._generation_medatadata)
-        cc_full["runtime"].update({"_datefmt": self._datefmt})
-
-        # Process configuration
-        logger.info("Processing model configuration...")
-        if callable(self.config):
-            # Run the __call__() method of the config object if it is callable passing
-            # the runtime instance, and fill in the context with what is returned
-            logger.info("Running configuration callable...")
-            cc_full["config"] = self.config(self)
-        else:
-            # Otherwise just fill in the context with the config instance itself
-            logger.info("Using static configuration...")
-            cc_full["config"] = self.config
-
-        # Render templates
-        logger.info(f"Rendering model configurations to {self.staging_dir}...")
-        self.config.render(cc_full, self.output_dir)
-
-        logger.info("")
-        # Use the log_box utility function
-        from rompy.formatting import log_box
-
-        log_box(
-            title="MODEL GENERATION COMPLETE",
-            logger=logger,
-            add_empty_line=False,
-        )
-        logger.info(f"Model files generated at: {self.staging_dir}")
-
-        # Write generate result sidecar
         try:
-            from rompy.core.result_persistence import write_generate_result
+            # Collect context data
+            cc_full = {}
+            cc_full["runtime"] = self.model_dump()
+            cc_full["runtime"]["staging_dir"] = self.staging_dir
+            cc_full["runtime"].update(self._generation_medatadata)
+            cc_full["runtime"].update({"_datefmt": self._datefmt})
 
-            # Collect generated files from staging directory
-            generated_files = [
-                str(f.relative_to(self.staging_dir))
-                for f in self.staging_dir.iterdir()
-                if f.is_file()
-            ]
+            # Process configuration
+            logger.info("Processing model configuration...")
+            if callable(self.config):
+                # Run the __call__() method of the config object if it is callable passing
+                # the runtime instance, and fill in the context with what is returned
+                logger.info("Running configuration callable...")
+                cc_full["config"] = self.config(self)
+            else:
+                # Otherwise just fill in the context with the config instance itself
+                logger.info("Using static configuration...")
+                cc_full["config"] = self.config
 
-            # Build GenerateResult payload
-            generate_result = GenerateResult(
-                generated_at=datetime.now(timezone.utc),
-                staging_dir=str(self.staging_dir),
-                config_file=None,  # Could be extracted from config if available
-                success=True,
-                generated_files=generated_files,
+            # Render templates
+            logger.info(f"Rendering model configurations to {self.staging_dir}...")
+            self.config.render(cc_full, self.output_dir)
+
+            logger.info("")
+            # Use the log_box utility function
+            from rompy.formatting import log_box
+
+            log_box(
+                title="MODEL GENERATION COMPLETE",
+                logger=logger,
+                add_empty_line=False,
             )
+            logger.info(f"Model files generated at: {self.staging_dir}")
 
-            # Build GenerateResultSidecar envelope
-            sidecar = GenerateResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id=self.run_id,
-                staging_dir=str(self.staging_dir),
-                status="success",
-                success=True,
-                payload=generate_result,
-            )
+            # Write generate result sidecar
+            try:
+                from rompy.core.result_persistence import write_generate_result
 
-            # Write atomically to staging_dir/generate_result.json
-            sidecar_path = write_generate_result(self.staging_dir, sidecar)
-            logger.debug(f"Wrote generate result sidecar to {sidecar_path}")
+                # Collect generated files from staging directory
+                generated_files = [
+                    str(f.relative_to(self.staging_dir))
+                    for f in self.staging_dir.iterdir()
+                    if f.is_file()
+                ]
+
+                # Build GenerateResult payload
+                generate_result = GenerateResult(
+                    generated_at=datetime.now(timezone.utc),
+                    staging_dir=str(self.staging_dir),
+                    config_file=None,  # Could be extracted from config if available
+                    success=True,
+                    generated_files=generated_files,
+                )
+
+                # Build GenerateResultSidecar envelope
+                sidecar = GenerateResultSidecar(
+                    created_at=datetime.now(timezone.utc),
+                    run_id=self.run_id,
+                    staging_dir=str(self.staging_dir),
+                    status="success",
+                    success=True,
+                    payload=generate_result,
+                )
+
+                # Write atomically to staging_dir/generate_result.json
+                sidecar_path = write_generate_result(self.staging_dir, sidecar)
+                logger.debug(f"Wrote generate result sidecar to {sidecar_path}")
+            except Exception as e:
+                # Don't fail the entire generation if sidecar writing fails
+                logger.warning(f"Failed to write generate result sidecar: {e}")
+
+            return self.staging_dir
+
         except Exception as e:
-            # Don't fail the entire generation if sidecar writing fails
-            logger.warning(f"Failed to write generate result sidecar: {e}")
+            # Write failure sidecar if staging_dir is known
+            try:
+                if self.staging_dir is not None:
+                    from rompy.core.result_persistence import write_generate_result
 
-        return self.staging_dir
+                    failure_sidecar = GenerateResultSidecar(
+                        created_at=datetime.now(timezone.utc),
+                        run_id=self.run_id,
+                        staging_dir=str(self.staging_dir),
+                        status="failed",
+                        success=False,
+                        error=str(e),
+                        payload=GenerateResult(
+                            generated_at=datetime.now(timezone.utc),
+                            staging_dir=str(self.staging_dir),
+                            config_file=None,
+                            success=False,
+                            generated_files=[],
+                            error=str(e),
+                        ),
+                    )
+                    write_generate_result(self.staging_dir, failure_sidecar)
+            except Exception:
+                # Sidecar write failure must not mask original error
+                pass
+            raise
 
     def zip(self) -> str:
         """Zip the input files for the model run

@@ -5,8 +5,6 @@ This module tests the postprocessor config classes, loading, and validation.
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 import yaml
@@ -21,7 +19,6 @@ from rompy.postprocess.config import (
     validate_postprocessor_config,
 )
 from rompy.core.responses import (
-    PostprocessResult,
     PostprocessSuccess,
     PostprocessFailure,
 )

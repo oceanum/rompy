@@ -10,7 +10,7 @@ Tests that generate() writes generate_result.json sidecar with:
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

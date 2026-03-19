@@ -49,9 +49,8 @@ Examples:
         print(f"Took {timing.duration_seconds:.2f} seconds")
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
-from pathlib import Path
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import Field, computed_field

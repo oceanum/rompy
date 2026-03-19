@@ -1,8 +1,7 @@
 """Tests for cloud storage transfer backend using cloudpathlib."""
 
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 
 from rompy.transfer.cloud import CloudTransfer
 

@@ -2,21 +2,18 @@
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from rompy.cli import cli
 from rompy.core.responses import (
-    Artifact,
     ModelRunResult,
     RunResultSidecar,
     TimingInfo,
 )
 from rompy.core.result_persistence import write_run_result
 from rompy.model import ModelRun
-from rompy.postprocess.config import NoopPostprocessorConfig
 
 
 @pytest.fixture

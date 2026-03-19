@@ -8,15 +8,12 @@ Tests cover:
 - Error handling for missing required sections
 """
 
-import tempfile
 from datetime import datetime
-from pathlib import Path
 
 
 import pytest
 import yaml
 
-from rompy.backends import LocalConfig
 from rompy.cli import load_config
 
 from rompy.core.time import TimeRange

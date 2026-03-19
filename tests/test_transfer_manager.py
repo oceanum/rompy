@@ -6,7 +6,6 @@ from pathlib import Path
 from rompy.transfer.manager import (
     TransferManager,
     TransferFailurePolicy,
-    TransferItemResult,
     TransferBatchResult,
 )
 

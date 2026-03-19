@@ -19,12 +19,6 @@ import yaml
 
 import rompy
 from rompy.backends import DockerConfig, LocalConfig, SlurmConfig
-from rompy.core.responses import (
-    PipelineFailure,
-    PipelineSuccess,
-    PostprocessFailure,
-    PostprocessSuccess,
-)
 from rompy.logging import LogFormat, LoggingConfig, LogLevel, get_logger
 from rompy.model import PIPELINE_BACKENDS, POSTPROCESSORS, RUN_BACKENDS, ModelRun
 from rompy.templating import render_templates
@@ -836,8 +830,8 @@ def postprocess(
 
         if not run_result.success and not force:
             logger.error(
-                f"❌ Run result shows success=false. Cannot postprocess failed run.\n"
-                f"Use --force to override this check."
+                "❌ Run result shows success=false. Cannot postprocess failed run.\n"
+                "Use --force to override this check."
             )
 
             if json_output:
@@ -881,8 +875,8 @@ def postprocess(
                     sys.exit(0)
                 else:
                     logger.warning(
-                        f"⚠️  Postprocessing already completed successfully, but --force specified. "
-                        f"Reprocessing and overwriting existing result."
+                        "⚠️  Postprocessing already completed successfully, but --force specified. "
+                        "Reprocessing and overwriting existing result."
                     )
         except FileNotFoundError:
             # First run - no existing postprocess result, continue normally
@@ -1069,7 +1063,6 @@ def validate_backend_config(
         if processor_type:
             # Validate postprocessor configuration
             from rompy.postprocess.config import (
-                _load_processor_config,
                 validate_postprocessor_config,
             )
 
@@ -1080,7 +1073,7 @@ def validate_backend_config(
             if not is_valid:
                 raise click.UsageError(message)
 
-            logger.info(f"✅ Postprocessor configuration is valid")
+            logger.info("✅ Postprocessor configuration is valid")
             logger.info(f"Processor type: {config.type}")
             logger.info(f"Timeout: {config.timeout}s")
             if hasattr(config, "validate_outputs"):

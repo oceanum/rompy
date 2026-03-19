@@ -354,7 +354,6 @@ class TestModelRunPydanticIntegration:
 
     def test_run_timing_accuracy(self, model_run, tmp_path):
         """Test that run() captures accurate timing information."""
-        import time
 
         output_dir = tmp_path / model_run.run_id
         output_dir.mkdir(parents=True, exist_ok=True)

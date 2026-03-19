@@ -1,13 +1,11 @@
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from rompy.cli import cli
 from rompy.core.responses import (
-    Artifact,
     ModelRunResult,
     PostprocessSuccess,
     PostprocessFailure,
@@ -195,15 +193,15 @@ def test_postprocess_skips_when_already_completed(
         ],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"Expected exit 0 (skip), got: {result.exit_code}\nOutput: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    assert result.exit_code == 0, (
+        f"Expected exit 0 (skip), got: {result.exit_code}\nOutput: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    )
 
     new_content = original_sidecar.read_text()
     new_data = json.loads(new_content)
-    assert (
-        new_data["updated_at"] == original_data["updated_at"]
-    ), "Sidecar was modified (expected idempotency skip)"
+    assert new_data["updated_at"] == original_data["updated_at"], (
+        "Sidecar was modified (expected idempotency skip)"
+    )
 
 
 def test_postprocess_reruns_when_force_specified(
@@ -237,9 +235,9 @@ def test_postprocess_reruns_when_force_specified(
         ],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"Unexpected failure: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    assert result.exit_code == 0, (
+        f"Unexpected failure: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    )
 
     sidecar_path = staging_dir / POSTPROCESS_RESULT_FILENAME
     assert sidecar_path.exists()
@@ -247,9 +245,9 @@ def test_postprocess_reruns_when_force_specified(
     assert raw["success"] is True
 
     new_mtime = sidecar_path.stat().st_mtime
-    assert (
-        new_mtime > original_mtime
-    ), "Sidecar file was not modified (expected reprocessing)"
+    assert new_mtime > original_mtime, (
+        "Sidecar file was not modified (expected reprocessing)"
+    )
 
 
 def test_postprocess_executes_normally_on_first_run(
@@ -275,9 +273,9 @@ def test_postprocess_executes_normally_on_first_run(
         ],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"Unexpected failure: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    assert result.exit_code == 0, (
+        f"Unexpected failure: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    )
 
     sidecar_path = staging_dir / POSTPROCESS_RESULT_FILENAME
     assert sidecar_path.exists()
@@ -312,9 +310,9 @@ def test_postprocess_continues_on_corrupt_postprocess_result(
         ],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"Expected success despite corrupt sidecar: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    assert result.exit_code == 0, (
+        f"Expected success despite corrupt sidecar: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    )
 
     assert corrupt_sidecar.exists()
     raw = json.loads(corrupt_sidecar.read_text())
@@ -356,14 +354,14 @@ def test_postprocess_continues_on_schema_mismatch_postprocess_result(
         ],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"Expected success despite schema mismatch: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    assert result.exit_code == 0, (
+        f"Expected success despite schema mismatch: {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    )
 
     new_data = json.loads(mismatched_sidecar.read_text())
-    assert (
-        new_data["kind"] == "postprocess_result"
-    ), "Sidecar was not overwritten with correct schema"
+    assert new_data["kind"] == "postprocess_result", (
+        "Sidecar was not overwritten with correct schema"
+    )
     assert new_data["success"] is True
 
 
@@ -394,9 +392,9 @@ def test_postprocess_reruns_when_previous_attempt_failed(
         ],
     )
 
-    assert (
-        result.exit_code == 0
-    ), f"Expected success (retry failed postprocess): {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    assert result.exit_code == 0, (
+        f"Expected success (retry failed postprocess): {result.output}\nException: {result.exception if hasattr(result, 'exception') else 'None'}"
+    )
 
     sidecar_path = staging_dir / POSTPROCESS_RESULT_FILENAME
     assert sidecar_path.exists()

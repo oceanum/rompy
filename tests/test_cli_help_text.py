@@ -1,6 +1,5 @@
 from click.testing import CliRunner
 from rompy.cli import cli
-import pytest
 
 
 def test_generate_help_mentions_sidecar_and_json():
