@@ -25,6 +25,7 @@ from rompy.core.responses import (
     PipelineResult,
     PostprocessFailure,
     PostprocessResult,
+    PostprocessResultSidecar,
     TimingInfo,
 )
 from rompy.core.time import TimeRange
@@ -619,11 +620,31 @@ class ModelRun(RompyBaseModel):
             processor_fields.update(kwargs)
 
             # Processor returns PostprocessResult directly
-            return processor_instance.process(self, **processor_fields)
+            result = processor_instance.process(self, **processor_fields)
+
+            # Write postprocess result sidecar
+            from rompy.core.result_persistence import write_postprocess_result
+
+            sidecar = PostprocessResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id=self.run_id,
+                staging_dir=str(self.staging_dir),
+                status="success" if result.success else "failed",
+                success=result.success,
+                error=result.error if hasattr(result, "error") else None,
+                payload=result,
+            )
+            try:
+                write_postprocess_result(Path(self.staging_dir), sidecar)
+            except Exception:
+                # Sidecar write failure must NOT mask postprocess result
+                pass
+
+            return result
 
         except Exception as e:
             # Wrap any top-level exceptions in PostprocessFailure
-            return PostprocessFailure(
+            result = PostprocessFailure(
                 run_id=self.run_id,
                 message=f"Postprocessing failed: {str(e)}",
                 error=str(e),
@@ -632,6 +653,26 @@ class ModelRun(RompyBaseModel):
                     end_time=datetime.now(timezone.utc),
                 ),
             )
+
+            # Write postprocess result sidecar (failure case)
+            from rompy.core.result_persistence import write_postprocess_result
+
+            sidecar = PostprocessResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id=self.run_id,
+                staging_dir=str(self.staging_dir),
+                status="failed",
+                success=False,
+                error=str(e),
+                payload=result,
+            )
+            try:
+                write_postprocess_result(Path(self.staging_dir), sidecar)
+            except Exception:
+                # Sidecar write failure must NOT mask postprocess result
+                pass
+
+            return result
 
     def pipeline(self, pipeline_backend: str = "local", **kwargs) -> PipelineResult:
         """
