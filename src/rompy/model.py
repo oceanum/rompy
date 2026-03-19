@@ -19,6 +19,8 @@ from rompy.backends import BackendConfig
 from rompy.backends.config import BaseBackendConfig
 from rompy.core.config import BaseConfig
 from rompy.core.responses import (
+    GenerateResult,
+    GenerateResultSidecar,
     ModelRunResult,
     PipelineResult,
     PostprocessFailure,
@@ -274,6 +276,44 @@ class ModelRun(RompyBaseModel):
             add_empty_line=False,
         )
         logger.info(f"Model files generated at: {self.staging_dir}")
+
+        # Write generate result sidecar
+        try:
+            from rompy.core.result_persistence import write_generate_result
+
+            # Collect generated files from staging directory
+            generated_files = [
+                str(f.relative_to(self.staging_dir))
+                for f in self.staging_dir.iterdir()
+                if f.is_file()
+            ]
+
+            # Build GenerateResult payload
+            generate_result = GenerateResult(
+                generated_at=datetime.now(timezone.utc),
+                staging_dir=str(self.staging_dir),
+                config_file=None,  # Could be extracted from config if available
+                success=True,
+                generated_files=generated_files,
+            )
+
+            # Build GenerateResultSidecar envelope
+            sidecar = GenerateResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id=self.run_id,
+                staging_dir=str(self.staging_dir),
+                status="success",
+                success=True,
+                payload=generate_result,
+            )
+
+            # Write atomically to staging_dir/generate_result.json
+            sidecar_path = write_generate_result(self.staging_dir, sidecar)
+            logger.debug(f"Wrote generate result sidecar to {sidecar_path}")
+        except Exception as e:
+            # Don't fail the entire generation if sidecar writing fails
+            logger.warning(f"Failed to write generate result sidecar: {e}")
+
         return self.staging_dir
 
     def zip(self) -> str:
@@ -368,7 +408,7 @@ class ModelRun(RompyBaseModel):
         try:
             # Validate backend type
             if not isinstance(backend, BaseBackendConfig):
-                return ModelRunResult(
+                result = ModelRunResult(
                     success=False,
                     run_id=self.run_id,
                     backend_used=type(backend).__name__,
@@ -381,6 +421,28 @@ class ModelRun(RompyBaseModel):
                         end_time=datetime.now(timezone.utc),
                     ),
                 )
+
+                # Write run_result.json sidecar
+                if workspace_dir:
+                    from rompy.core.result_persistence import write_run_result
+                    from rompy.core.responses import RunResultSidecar
+
+                    sidecar = RunResultSidecar(
+                        created_at=datetime.now(timezone.utc),
+                        run_id=result.run_id,
+                        staging_dir=str(workspace_dir),
+                        status="failed",
+                        success=False,
+                        error=result.error,
+                        payload=result,
+                    )
+                    try:
+                        write_run_result(Path(workspace_dir), sidecar)
+                    except Exception:
+                        # Sidecar write failure must NOT mask run result
+                        pass
+
+                return result
 
             logger.debug(f"Using backend config: {type(backend).__name__}")
 
@@ -399,7 +461,7 @@ class ModelRun(RompyBaseModel):
             if success and output_dir_str:
                 artifacts = self.config.validate_outputs(output_dir_str)
 
-            return ModelRunResult(
+            result = ModelRunResult(
                 success=success,
                 run_id=self.run_id,
                 backend_used=backend_class_name,
@@ -420,11 +482,33 @@ class ModelRun(RompyBaseModel):
                 },
             )
 
+            # Write run_result.json sidecar
+            if workspace_dir:
+                from rompy.core.result_persistence import write_run_result
+                from rompy.core.responses import RunResultSidecar
+
+                sidecar = RunResultSidecar(
+                    created_at=datetime.now(timezone.utc),
+                    run_id=result.run_id,
+                    staging_dir=str(workspace_dir),
+                    status="success" if result.success else "failed",
+                    success=result.success,
+                    error=result.error,
+                    payload=result,
+                )
+                try:
+                    write_run_result(Path(workspace_dir), sidecar)
+                except Exception:
+                    # Sidecar write failure must NOT mask run result
+                    pass
+
+            return result
+
         except Exception as e:
             # Wrap any exceptions in ModelRunResult
             workspace_dir_str = str(workspace_dir) if workspace_dir else None
 
-            return ModelRunResult(
+            result = ModelRunResult(
                 success=False,
                 run_id=self.run_id,
                 backend_used=(
@@ -441,6 +525,28 @@ class ModelRun(RompyBaseModel):
                     end_time=datetime.now(timezone.utc),
                 ),
             )
+
+            # Write run_result.json sidecar
+            if workspace_dir:
+                from rompy.core.result_persistence import write_run_result
+                from rompy.core.responses import RunResultSidecar
+
+                sidecar = RunResultSidecar(
+                    created_at=datetime.now(timezone.utc),
+                    run_id=result.run_id,
+                    staging_dir=str(workspace_dir),
+                    status="failed",
+                    success=False,
+                    error=result.error,
+                    payload=result,
+                )
+                try:
+                    write_run_result(Path(workspace_dir), sidecar)
+                except Exception:
+                    # Sidecar write failure must NOT mask run result
+                    pass
+
+            return result
 
     def postprocess(self, processor, **kwargs) -> PostprocessResult:
         """
