@@ -710,7 +710,11 @@ def postprocess(
         logger.info(f"Postprocessor: {processor_cfg.type}")
 
         from pathlib import Path
-        from rompy.core.result_persistence import load_run_result
+        from rompy.core.result_persistence import (
+            load_run_result,
+            load_postprocess_result,
+            POSTPROCESS_RESULT_FILENAME,
+        )
 
         if run_result_path:
             sidecar_path = Path(run_result_path)
@@ -741,6 +745,32 @@ def postprocess(
         if not run_result.success and force:
             logger.warning(
                 "⚠️  Run result shows success=false but --force specified. Proceeding anyway."
+            )
+
+        # Check for existing postprocess result (idempotency guard)
+        try:
+            postprocess_result = load_postprocess_result(model_run.staging_dir)
+            if postprocess_result.success:
+                if not force:
+                    logger.info(
+                        f"✅ Postprocessing already completed successfully. "
+                        f"Result stored in: {model_run.staging_dir / POSTPROCESS_RESULT_FILENAME}\n"
+                        f"Use --force to reprocess."
+                    )
+                    sys.exit(0)
+                else:
+                    logger.warning(
+                        f"⚠️  Postprocessing already completed successfully, but --force specified. "
+                        f"Reprocessing and overwriting existing result."
+                    )
+        except FileNotFoundError:
+            # First run - no existing postprocess result, continue normally
+            pass
+        except ValueError as e:
+            # Corrupt or schema mismatch - log warning but continue
+            logger.warning(
+                f"⚠️  Found corrupt postprocess result sidecar, ignoring: {e}\n"
+                f"Continuing with postprocessing."
             )
 
         # Run postprocessing
