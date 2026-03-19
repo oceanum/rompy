@@ -342,10 +342,10 @@ def run(
             logger.info("Dry run mode - skipping model execution")
             return
 
-        success = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
+        result = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
 
         elapsed = datetime.now() - start_time
-        if success:
+        if result.success:
             logger.info(
                 f"✅ Model completed successfully in {elapsed.total_seconds():.2f}s"
             )
