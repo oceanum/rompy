@@ -292,6 +292,9 @@ def run(
 ):
     """Run a model configuration using Pydantic backend configuration.
 
+    Writes run_result.json to the staging directory on success and failure.
+    Use --json to emit the sidecar JSON to stdout.
+
     Examples:
         # Run with local backend configuration
         rompy run config.yml --backend-config unified_local_single.yml
@@ -636,7 +639,11 @@ def generate(
     simple_logs,
     config_from_env,
 ):
-    """Generate model input files only."""
+    """Generate model input files only.
+
+    Writes generate_result.json to the staging directory after completion.
+    Use --json to emit the sidecar JSON to stdout.
+    """
     configure_logging(verbose, log_dir, simple_logs, ascii_only, show_warnings)
 
     # Validate config source
@@ -739,18 +746,26 @@ def postprocess(
 ):
     """Run postprocessing on model outputs using the specified postprocessor.
 
+    Requires run_result.json in the staging directory (written by 'rompy run').
+    Use --run-result PATH to specify an explicit sidecar location.
+    Use --force to reprocess even if run_result.json shows success=false,
+      or to reprocess even if postprocessing already completed.
+    Writes postprocess_result.json to the staging directory after completion.
+    Use --json to emit the sidecar JSON to stdout.
+
     Examples:
-        # Run with processor configuration file
+        # Fail-fast: missing run result
         rompy postprocess config.yml --processor-config processor.yml
+        # (exits 1 if run_result.json not found in staging dir)
 
-        # Run with config from environment variable
-        rompy postprocess --config-from-env --processor-config processor.yml
-
-        # Run with explicit run result sidecar
+        # Explicit sidecar path
         rompy postprocess config.yml --processor-config processor.yml --run-result /path/to/run_result.json
 
-        # Force postprocessing even if run failed
+        # Force rerun
         rompy postprocess config.yml --processor-config processor.yml --force
+
+        # Machine-readable output
+        rompy postprocess config.yml --processor-config processor.yml --json
     """
     configure_logging(verbose, log_dir, simple_logs, ascii_only, show_warnings)
 
