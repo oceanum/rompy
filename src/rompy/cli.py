@@ -644,12 +644,27 @@ def generate(
     default=True,
     help="Validate outputs exist (default: True)",
 )
+@click.option(
+    "--run-result",
+    "run_result_path",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to run_result.json sidecar (default: auto-discover from staging dir)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force reprocessing even if run result shows success=false",
+)
 @add_common_options
 def postprocess(
     config,
     processor_config,
     output_dir,
     validate_outputs,
+    run_result_path,
+    force,
     verbose,
     log_dir,
     show_warnings,
@@ -665,6 +680,12 @@ def postprocess(
 
         # Run with config from environment variable
         rompy postprocess --config-from-env --processor-config processor.yml
+
+        # Run with explicit run result sidecar
+        rompy postprocess config.yml --processor-config processor.yml --run-result /path/to/run_result.json
+
+        # Force postprocessing even if run failed
+        rompy postprocess config.yml --processor-config processor.yml --force
     """
     configure_logging(verbose, log_dir, simple_logs, ascii_only, show_warnings)
 
@@ -687,6 +708,40 @@ def postprocess(
         logger.info(f"Running postprocessing for: {model_run.config.model_type}")
         logger.info(f"Run ID: {model_run.run_id}")
         logger.info(f"Postprocessor: {processor_cfg.type}")
+
+        from pathlib import Path
+        from rompy.core.result_persistence import load_run_result
+
+        if run_result_path:
+            sidecar_path = Path(run_result_path)
+        else:
+            sidecar_path = model_run.staging_dir / "run_result.json"
+
+        logger.info(f"Loading run result from: {sidecar_path}")
+
+        try:
+            run_result = load_run_result(sidecar_path)
+        except FileNotFoundError:
+            logger.error(
+                f"❌ Run result sidecar not found: {sidecar_path}\n"
+                f"The model must be executed before postprocessing."
+            )
+            sys.exit(1)
+        except ValueError as e:
+            logger.error(f"❌ Invalid run result sidecar: {e}")
+            sys.exit(1)
+
+        if not run_result.success and not force:
+            logger.error(
+                f"❌ Run result shows success=false. Cannot postprocess failed run.\n"
+                f"Use --force to override this check."
+            )
+            sys.exit(1)
+
+        if not run_result.success and force:
+            logger.warning(
+                "⚠️  Run result shows success=false but --force specified. Proceeding anyway."
+            )
 
         # Run postprocessing
         start_time = datetime.now()
