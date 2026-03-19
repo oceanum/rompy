@@ -408,3 +408,225 @@ class ModelRunResult(RompyBaseModel):
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Backend-specific metadata"
     )
+
+
+class GenerateResult(RompyBaseModel):
+    """Result from template generation operation.
+
+    Returned by generate operations to provide structured information about
+    configuration file generation.
+
+    Attributes:
+        schema_version: Schema version for compatibility tracking
+        generated_at: Timestamp when generation completed (UTC)
+        staging_dir: Local directory where files were generated
+        config_file: Path to the generated configuration file
+        success: Whether generation succeeded
+        error: Error message if success=False
+        generated_files: List of paths to all generated files
+
+    Examples:
+        ::
+
+            result = GenerateResult(
+                generated_at=datetime.now(timezone.utc),
+                staging_dir="/path/to/staging",
+                config_file="ww3_shel.nml",
+                success=True,
+                generated_files=["ww3_shel.nml", "mod_def.ww3"]
+            )
+
+            if result.success:
+                print(f"Generated {len(result.generated_files)} files in {result.staging_dir}")
+            else:
+                print(f"Generation failed: {result.error}")
+    """
+
+    schema_version: int = Field(
+        default=1, description="Schema version for compatibility tracking"
+    )
+    generated_at: datetime = Field(
+        ..., description="Timestamp when generation completed (UTC)"
+    )
+    staging_dir: str = Field(
+        ..., description="Local directory where files were generated"
+    )
+    config_file: Optional[str] = Field(
+        None, description="Path to the generated configuration file"
+    )
+    success: bool = Field(..., description="Whether generation succeeded")
+    error: Optional[str] = Field(None, description="Error message if success=False")
+    generated_files: List[str] = Field(
+        default_factory=list, description="List of paths to all generated files"
+    )
+
+
+class GenerateResultSidecar(RompyBaseModel):
+    """Sidecar envelope for GenerateResult persistence.
+
+    Wraps GenerateResult with metadata for sidecar file writing (generate_result.json).
+
+    Attributes:
+        kind: Discriminator for sidecar type
+        schema_version: Schema version for compatibility tracking
+        created_at: Timestamp when sidecar was created (UTC)
+        updated_at: Timestamp when sidecar was last updated (UTC)
+        run_id: Run identifier
+        staging_dir: Local staging directory path
+        status: Current operation status
+        success: Whether operation succeeded
+        error: Error message if success=False
+        payload: The actual GenerateResult data
+
+    Examples:
+        ::
+
+            result = GenerateResult(...)
+            sidecar = GenerateResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id="run-123",
+                staging_dir="/path/to/staging",
+                status="success",
+                success=True,
+                payload=result
+            )
+
+            # Serialize to JSON for file writing
+            json_str = sidecar.model_dump_json(indent=2)
+    """
+
+    kind: Literal["generate_result"] = Field(
+        default="generate_result", description="Discriminator for sidecar type"
+    )
+    schema_version: int = Field(
+        default=1, description="Schema version for compatibility tracking"
+    )
+    created_at: datetime = Field(
+        ..., description="Timestamp when sidecar was created (UTC)"
+    )
+    updated_at: Optional[datetime] = Field(
+        None, description="Timestamp when sidecar was last updated (UTC)"
+    )
+    run_id: str = Field(..., description="Run identifier")
+    staging_dir: str = Field(..., description="Local staging directory path")
+    status: Literal["running", "success", "failed"] = Field(
+        ..., description="Current operation status"
+    )
+    success: bool = Field(..., description="Whether operation succeeded")
+    error: Optional[str] = Field(None, description="Error message if success=False")
+    payload: GenerateResult = Field(..., description="The actual GenerateResult data")
+
+
+class RunResultSidecar(RompyBaseModel):
+    """Sidecar envelope for ModelRunResult persistence.
+
+    Wraps ModelRunResult with metadata for sidecar file writing (run_result.json).
+
+    Attributes:
+        kind: Discriminator for sidecar type
+        schema_version: Schema version for compatibility tracking
+        created_at: Timestamp when sidecar was created (UTC)
+        updated_at: Timestamp when sidecar was last updated (UTC)
+        run_id: Run identifier
+        staging_dir: Local staging directory path
+        status: Current operation status
+        success: Whether operation succeeded
+        error: Error message if success=False
+        payload: The actual ModelRunResult data
+
+    Examples:
+        ::
+
+            result = ModelRunResult(...)
+            sidecar = RunResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id="run-123",
+                staging_dir="/path/to/staging",
+                status="success",
+                success=True,
+                payload=result
+            )
+
+            # Serialize to JSON for file writing
+            json_str = sidecar.model_dump_json(indent=2)
+    """
+
+    kind: Literal["run_result"] = Field(
+        default="run_result", description="Discriminator for sidecar type"
+    )
+    schema_version: int = Field(
+        default=1, description="Schema version for compatibility tracking"
+    )
+    created_at: datetime = Field(
+        ..., description="Timestamp when sidecar was created (UTC)"
+    )
+    updated_at: Optional[datetime] = Field(
+        None, description="Timestamp when sidecar was last updated (UTC)"
+    )
+    run_id: str = Field(..., description="Run identifier")
+    staging_dir: str = Field(..., description="Local staging directory path")
+    status: Literal["running", "success", "failed"] = Field(
+        ..., description="Current operation status"
+    )
+    success: bool = Field(..., description="Whether operation succeeded")
+    error: Optional[str] = Field(None, description="Error message if success=False")
+    payload: ModelRunResult = Field(..., description="The actual ModelRunResult data")
+
+
+class PostprocessResultSidecar(RompyBaseModel):
+    """Sidecar envelope for PostprocessResult persistence.
+
+    Wraps PostprocessResult (union of PostprocessSuccess/PostprocessFailure) with metadata
+    for sidecar file writing (postprocess_result.json).
+
+    Attributes:
+        kind: Discriminator for sidecar type
+        schema_version: Schema version for compatibility tracking
+        created_at: Timestamp when sidecar was created (UTC)
+        updated_at: Timestamp when sidecar was last updated (UTC)
+        run_id: Run identifier
+        staging_dir: Local staging directory path
+        status: Current operation status
+        success: Whether operation succeeded
+        error: Error message if success=False
+        payload: The actual PostprocessResult data (PostprocessSuccess or PostprocessFailure)
+
+    Examples:
+        ::
+
+            result = PostprocessSuccess(...)
+            sidecar = PostprocessResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id="run-123",
+                staging_dir="/path/to/staging",
+                status="success",
+                success=True,
+                payload=result
+            )
+
+            # Serialize to JSON for file writing
+            json_str = sidecar.model_dump_json(indent=2)
+    """
+
+    kind: Literal["postprocess_result"] = Field(
+        default="postprocess_result", description="Discriminator for sidecar type"
+    )
+    schema_version: int = Field(
+        default=1, description="Schema version for compatibility tracking"
+    )
+    created_at: datetime = Field(
+        ..., description="Timestamp when sidecar was created (UTC)"
+    )
+    updated_at: Optional[datetime] = Field(
+        None, description="Timestamp when sidecar was last updated (UTC)"
+    )
+    run_id: str = Field(..., description="Run identifier")
+    staging_dir: str = Field(..., description="Local staging directory path")
+    status: Literal["running", "success", "failed"] = Field(
+        ..., description="Current operation status"
+    )
+    success: bool = Field(..., description="Whether operation succeeded")
+    error: Optional[str] = Field(None, description="Error message if success=False")
+    payload: PostprocessResult = Field(
+        ..., description="The actual PostprocessResult data"
+    )

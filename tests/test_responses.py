@@ -8,6 +8,8 @@ import pytest
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
+    GenerateResult,
+    GenerateResultSidecar,
     ModelRunResult,
     PipelineFailure,
     PipelineResult,
@@ -15,7 +17,9 @@ from rompy.core.responses import (
     PipelineSuccess,
     PostprocessFailure,
     PostprocessResult,
+    PostprocessResultSidecar,
     PostprocessSuccess,
+    RunResultSidecar,
     TimingInfo,
 )
 
@@ -628,3 +632,293 @@ class TestSerialization:
         assert reconstructed.run_id == original.run_id
         assert len(reconstructed.artifacts) == len(original.artifacts)
         assert reconstructed.artifacts[0].path == "file.nc"
+
+
+class TestGenerateResult:
+    """Test GenerateResult model."""
+
+    def test_construction_success(self):
+        """Test successful GenerateResult construction."""
+        now = datetime.now(timezone.utc)
+        result = GenerateResult(
+            generated_at=now,
+            staging_dir="/path/to/staging",
+            config_file="ww3_shel.nml",
+            success=True,
+            generated_files=["ww3_shel.nml", "mod_def.ww3"],
+        )
+
+        assert result.schema_version == 1
+        assert result.generated_at == now
+        assert result.staging_dir == "/path/to/staging"
+        assert result.config_file == "ww3_shel.nml"
+        assert result.success is True
+        assert result.error is None
+        assert result.generated_files == ["ww3_shel.nml", "mod_def.ww3"]
+
+    def test_construction_failure(self):
+        """Test failed GenerateResult construction."""
+        now = datetime.now(timezone.utc)
+        result = GenerateResult(
+            generated_at=now,
+            staging_dir="/path/to/staging",
+            success=False,
+            error="Template rendering failed",
+        )
+
+        assert result.success is False
+        assert result.error == "Template rendering failed"
+        assert result.generated_files == []
+
+    def test_json_round_trip(self):
+        """Test GenerateResult JSON serialization round-trip."""
+        original = GenerateResult(
+            generated_at=datetime.now(timezone.utc),
+            staging_dir="/staging",
+            config_file="config.yaml",
+            success=True,
+            generated_files=["config.yaml", "grid.nc"],
+        )
+
+        json_str = original.model_dump_json()
+        reconstructed = GenerateResult.model_validate_json(json_str)
+
+        assert reconstructed.schema_version == original.schema_version
+        assert reconstructed.staging_dir == original.staging_dir
+        assert reconstructed.config_file == original.config_file
+        assert reconstructed.success == original.success
+        assert reconstructed.generated_files == original.generated_files
+
+    def test_missing_required_fields_raises_validation_error(self):
+        """Test missing required fields raises ValidationError."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            GenerateResult(success=True)
+
+        assert "generated_at" in str(exc_info.value)
+        assert "staging_dir" in str(exc_info.value)
+
+
+class TestGenerateResultSidecar:
+    """Test GenerateResultSidecar envelope model."""
+
+    def test_construction(self):
+        """Test GenerateResultSidecar construction."""
+        now = datetime.now(timezone.utc)
+        payload = GenerateResult(
+            generated_at=now,
+            staging_dir="/staging",
+            success=True,
+            generated_files=["file.nml"],
+        )
+
+        sidecar = GenerateResultSidecar(
+            created_at=now,
+            run_id="run-123",
+            staging_dir="/staging",
+            status="success",
+            success=True,
+            payload=payload,
+        )
+
+        assert sidecar.kind == "generate_result"
+        assert sidecar.schema_version == 1
+        assert sidecar.created_at == now
+        assert sidecar.updated_at is None
+        assert sidecar.run_id == "run-123"
+        assert sidecar.staging_dir == "/staging"
+        assert sidecar.status == "success"
+        assert sidecar.success is True
+        assert sidecar.error is None
+        assert sidecar.payload == payload
+
+    def test_json_round_trip(self):
+        """Test sidecar JSON serialization round-trip."""
+        now = datetime.now(timezone.utc)
+        payload = GenerateResult(
+            generated_at=now,
+            staging_dir="/staging",
+            success=True,
+            generated_files=["config.yaml"],
+        )
+
+        original = GenerateResultSidecar(
+            created_at=now,
+            run_id="run-456",
+            staging_dir="/staging",
+            status="success",
+            success=True,
+            payload=payload,
+        )
+
+        json_str = original.model_dump_json()
+        reconstructed = GenerateResultSidecar.model_validate_json(json_str)
+
+        assert reconstructed.kind == original.kind
+        assert reconstructed.schema_version == original.schema_version
+        assert reconstructed.run_id == original.run_id
+        assert reconstructed.status == original.status
+        assert reconstructed.success == original.success
+        assert reconstructed.payload.staging_dir == payload.staging_dir
+        assert reconstructed.payload.generated_files == payload.generated_files
+
+    def test_missing_required_fields_raises_validation_error(self):
+        """Test missing required fields raises ValidationError."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            GenerateResultSidecar(success=True, status="success")
+
+        assert "created_at" in str(exc_info.value)
+        assert "run_id" in str(exc_info.value)
+        assert "staging_dir" in str(exc_info.value)
+        assert "payload" in str(exc_info.value)
+
+
+class TestRunResultSidecar:
+    """Test RunResultSidecar envelope model."""
+
+    def test_construction(self):
+        """Test RunResultSidecar construction."""
+        now = datetime.now(timezone.utc)
+        timing = TimingInfo(start_time=now, end_time=now + timedelta(seconds=30))
+        payload = ModelRunResult(
+            success=True,
+            run_id="run-789",
+            backend_used="LocalRunBackend",
+            output_dir="/output",
+            timing=timing,
+        )
+
+        sidecar = RunResultSidecar(
+            created_at=now,
+            run_id="run-789",
+            staging_dir="/staging",
+            status="success",
+            success=True,
+            payload=payload,
+        )
+
+        assert sidecar.kind == "run_result"
+        assert sidecar.schema_version == 1
+        assert sidecar.run_id == "run-789"
+        assert sidecar.status == "success"
+        assert sidecar.success is True
+        assert sidecar.payload == payload
+
+    def test_json_serialization(self):
+        """Test sidecar JSON serialization."""
+        now = datetime.now(timezone.utc)
+        timing = TimingInfo(start_time=now, end_time=now + timedelta(seconds=45))
+        payload = ModelRunResult(
+            success=True,
+            run_id="run-abc",
+            backend_used="DockerBackend",
+            output_dir="/output",
+            timing=timing,
+            artifacts=[Artifact(path="output.nc", artifact_type=ArtifactType.NETCDF)],
+        )
+
+        sidecar = RunResultSidecar(
+            created_at=now,
+            run_id="run-abc",
+            staging_dir="/staging",
+            status="success",
+            success=True,
+            payload=payload,
+        )
+
+        json_str = sidecar.model_dump_json()
+        data = json.loads(json_str)
+
+        assert data["kind"] == "run_result"
+        assert data["schema_version"] == 1
+        assert data["run_id"] == "run-abc"
+        assert data["status"] == "success"
+        assert data["success"] is True
+        assert data["payload"]["backend_used"] == "DockerBackend"
+        assert len(data["payload"]["artifacts"]) == 1
+        assert data["payload"]["artifacts"][0]["path"] == "output.nc"
+
+
+class TestPostprocessResultSidecar:
+    """Test PostprocessResultSidecar envelope model."""
+
+    def test_construction_with_success_payload(self):
+        """Test PostprocessResultSidecar with PostprocessSuccess payload."""
+        now = datetime.now(timezone.utc)
+        payload = PostprocessSuccess(
+            run_id="run-xyz",
+            output_dir="/output",
+            validated=True,
+        )
+
+        sidecar = PostprocessResultSidecar(
+            created_at=now,
+            run_id="run-xyz",
+            staging_dir="/staging",
+            status="success",
+            success=True,
+            payload=payload,
+        )
+
+        assert sidecar.kind == "postprocess_result"
+        assert sidecar.schema_version == 1
+        assert sidecar.success is True
+        assert isinstance(sidecar.payload, PostprocessSuccess)
+
+    def test_construction_with_failure_payload(self):
+        """Test PostprocessResultSidecar with PostprocessFailure payload."""
+        now = datetime.now(timezone.utc)
+        payload = PostprocessFailure(
+            run_id="run-fail",
+            output_dir="/output",
+            error="Transfer failed",
+        )
+
+        sidecar = PostprocessResultSidecar(
+            created_at=now,
+            run_id="run-fail",
+            staging_dir="/staging",
+            status="failed",
+            success=False,
+            error="Transfer failed",
+            payload=payload,
+        )
+
+        assert sidecar.success is False
+        assert sidecar.error == "Transfer failed"
+        assert isinstance(sidecar.payload, PostprocessFailure)
+
+    def test_json_serialization(self):
+        """Test sidecar JSON serialization."""
+        now = datetime.now(timezone.utc)
+        timing = TimingInfo(start_time=now, end_time=now + timedelta(seconds=60))
+        payload = PostprocessSuccess(
+            run_id="run-pp",
+            output_dir="/output",
+            validated=True,
+            timing=timing,
+            artifacts=[Artifact(path="plot.png", artifact_type=ArtifactType.PLOT)],
+        )
+
+        sidecar = PostprocessResultSidecar(
+            created_at=now,
+            run_id="run-pp",
+            staging_dir="/staging",
+            status="success",
+            success=True,
+            payload=payload,
+        )
+
+        json_str = sidecar.model_dump_json()
+        data = json.loads(json_str)
+
+        assert data["kind"] == "postprocess_result"
+        assert data["schema_version"] == 1
+        assert data["run_id"] == "run-pp"
+        assert data["success"] is True
+        assert data["payload"]["validated"] is True
+        assert len(data["payload"]["artifacts"]) == 1
+        assert data["payload"]["artifacts"][0]["path"] == "plot.png"
