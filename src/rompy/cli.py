@@ -270,12 +270,19 @@ def cli(ctx):
     is_flag=True,
     help="Skip generation step, use existing workspace (must already exist)",
 )
+@click.option(
+    "--json/--no-json",
+    "json_output",
+    default=False,
+    help="Emit machine-readable JSON to stdout",
+)
 @add_common_options
 def run(
     config,
     backend_config,
     dry_run,
     skip_generate,
+    json_output,
     verbose,
     log_dir,
     show_warnings,
@@ -353,12 +360,43 @@ def run(
             logger.error(
                 f"❌ Model execution failed after {elapsed.total_seconds():.2f}s"
             )
+
+            # Emit JSON if requested
+            if json_output:
+                sidecar_path = model_run.staging_dir / "run_result.json"
+                if sidecar_path.exists():
+                    print(sidecar_path.read_text())
+                else:
+                    print(
+                        json.dumps(
+                            {
+                                "success": False,
+                                "error": "Run failed but sidecar not found",
+                            }
+                        )
+                    )
+
             sys.exit(1)
+
+        # Emit JSON if requested
+        if json_output:
+            sidecar_path = model_run.staging_dir / "run_result.json"
+            if sidecar_path.exists():
+                print(sidecar_path.read_text())
+            else:
+                print(
+                    json.dumps({"success": True, "warning": "Sidecar file not found"})
+                )
 
     except Exception as e:
         logger.error(f"Error running model: {e}")
         if verbose > 0:
             logger.exception("Full traceback:")
+
+        # Emit error JSON if requested
+        if json_output:
+            print(json.dumps({"success": False, "error": str(e)}))
+
         sys.exit(1)
 
 
@@ -580,10 +618,17 @@ def pipeline(
 @cli.command()
 @click.argument("config", type=click.Path(exists=True), required=False)
 @click.option("--output-dir", help="Override output directory")
+@click.option(
+    "--json/--no-json",
+    "json_output",
+    default=False,
+    help="Emit machine-readable JSON to stdout",
+)
 @add_common_options
 def generate(
     config,
     output_dir,
+    json_output,
     verbose,
     log_dir,
     show_warnings,
@@ -623,10 +668,23 @@ def generate(
             files = list(Path(staging_dir).glob("*"))
             logger.info(f"Generated {len(files)} files")
 
+        # Emit JSON if requested
+        if json_output:
+            sidecar_path = Path(staging_dir) / "generate_result.json"
+            if sidecar_path.exists():
+                print(sidecar_path.read_text())
+            else:
+                print(json.dumps({"success": False, "error": "Sidecar file not found"}))
+
     except Exception as e:
         logger.error(f"Error generating inputs: {e}")
         if verbose > 0:
             logger.exception("Full traceback:")
+
+        # Emit error JSON if requested
+        if json_output:
+            print(json.dumps({"success": False, "error": str(e)}))
+
         sys.exit(1)
 
 
@@ -657,6 +715,12 @@ def generate(
     default=False,
     help="Force reprocessing even if run result shows success=false",
 )
+@click.option(
+    "--json/--no-json",
+    "json_output",
+    default=False,
+    help="Emit machine-readable JSON to stdout",
+)
 @add_common_options
 def postprocess(
     config,
@@ -665,6 +729,7 @@ def postprocess(
     validate_outputs,
     run_result_path,
     force,
+    json_output,
     verbose,
     log_dir,
     show_warnings,
@@ -730,9 +795,28 @@ def postprocess(
                 f"❌ Run result sidecar not found: {sidecar_path}\n"
                 f"The model must be executed before postprocessing."
             )
+
+            if json_output:
+                print(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": f"Run result sidecar not found: {sidecar_path}",
+                        }
+                    )
+                )
+
             sys.exit(1)
         except ValueError as e:
             logger.error(f"❌ Invalid run result sidecar: {e}")
+
+            if json_output:
+                print(
+                    json.dumps(
+                        {"success": False, "error": f"Invalid run result sidecar: {e}"}
+                    )
+                )
+
             sys.exit(1)
 
         if not run_result.success and not force:
@@ -740,6 +824,14 @@ def postprocess(
                 f"❌ Run result shows success=false. Cannot postprocess failed run.\n"
                 f"Use --force to override this check."
             )
+
+            if json_output:
+                print(
+                    json.dumps(
+                        {"success": False, "error": "Run result shows success=false"}
+                    )
+                )
+
             sys.exit(1)
 
         if not run_result.success and force:
@@ -757,6 +849,20 @@ def postprocess(
                         f"Result stored in: {model_run.staging_dir / POSTPROCESS_RESULT_FILENAME}\n"
                         f"Use --force to reprocess."
                     )
+
+                    if json_output:
+                        postprocess_sidecar_path = (
+                            model_run.staging_dir / POSTPROCESS_RESULT_FILENAME
+                        )
+                        if postprocess_sidecar_path.exists():
+                            print(postprocess_sidecar_path.read_text())
+                        else:
+                            print(
+                                json.dumps(
+                                    {"success": True, "message": "Already completed"}
+                                )
+                            )
+
                     sys.exit(0)
                 else:
                     logger.warning(
@@ -795,16 +901,43 @@ def postprocess(
                 logger.info(
                     f"Processing duration: {results.timing.duration_seconds:.2f}s"
                 )
+
+            if json_output:
+                postprocess_sidecar_path = (
+                    model_run.staging_dir / POSTPROCESS_RESULT_FILENAME
+                )
+                if postprocess_sidecar_path.exists():
+                    print(postprocess_sidecar_path.read_text())
+                else:
+                    print(
+                        json.dumps(
+                            {"success": True, "warning": "Sidecar file not found"}
+                        )
+                    )
         else:
             # results is PostprocessFailure
             error_msg = results.error if hasattr(results, "error") else "Unknown error"
             logger.error(f"❌ Postprocessing failed: {error_msg}")
+
+            if json_output:
+                postprocess_sidecar_path = (
+                    model_run.staging_dir / POSTPROCESS_RESULT_FILENAME
+                )
+                if postprocess_sidecar_path.exists():
+                    print(postprocess_sidecar_path.read_text())
+                else:
+                    print(json.dumps({"success": False, "error": error_msg}))
+
             sys.exit(1)
 
     except Exception as e:
         logger.error(f"❌ Postprocessing failed: {e}")
         if verbose > 0:
             logger.exception("Full traceback:")
+
+        if json_output:
+            print(json.dumps({"success": False, "error": str(e)}))
+
         sys.exit(1)
 
 
