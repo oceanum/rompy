@@ -69,6 +69,7 @@ class NormalizedContext(RompyBaseModel):
         model_type: Model type identifier (e.g., "ww3", "swan")
         period_start: Start of the modelling period (UTC)
         period_end: End of the modelling period (UTC)
+        period_interval: Sampling interval for the modelling period
         output_dir: Model output directory path
         staging_dir: Local staging directory path
         config_hash: SHA256 hash of generated file contents
@@ -83,6 +84,7 @@ class NormalizedContext(RompyBaseModel):
                 model_type="ww3",
                 period_start=datetime(2024, 1, 1, tzinfo=timezone.utc),
                 period_end=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                period_interval="1h",
                 output_dir="/path/to/output",
                 staging_dir="/path/to/staging",
                 config_hash="abc123...",
@@ -93,6 +95,9 @@ class NormalizedContext(RompyBaseModel):
     model_type: str = Field(..., description="Model type identifier")
     period_start: datetime = Field(..., description="Start of the modelling period")
     period_end: datetime = Field(..., description="End of the modelling period")
+    period_interval: str = Field(
+        ..., description="Sampling interval for the modelling period"
+    )
     output_dir: str = Field(..., description="Model output directory")
     staging_dir: str = Field(..., description="Local staging directory")
     config_hash: str = Field(..., description="SHA256 hash of generated file contents")

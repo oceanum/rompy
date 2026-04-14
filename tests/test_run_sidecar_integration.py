@@ -61,6 +61,7 @@ def test_run_sidecar_copies_normalized_context_from_generate(tmp_path):
         model_type="demo",
         period_start=model.period.start,
         period_end=model.period.end,
+        period_interval=str(model.period.interval),
         output_dir=str(model.output_dir),
         staging_dir=str(workspace),
         config_hash="abc123",
@@ -97,6 +98,9 @@ def test_run_sidecar_copies_normalized_context_from_generate(tmp_path):
     sidecar_data = json.loads(sidecar_path.read_text())
     assert "normalized_context" in sidecar_data
     assert sidecar_data["normalized_context"]["model_type"] == "demo"
+    assert sidecar_data["normalized_context"]["period_interval"] == str(
+        model.period.interval
+    )
     assert sidecar_data["normalized_context"]["config_hash"] == "abc123"
     assert (
         sidecar_data["normalized_context"]["extensions"]["custom_key"] == "custom_value"
@@ -133,5 +137,6 @@ def test_run_sidecar_computes_fallback_normalized_context(tmp_path):
     assert ctx["output_dir"] == str(tmp_path / "output")
     assert "period_start" in ctx
     assert "period_end" in ctx
+    assert ctx["period_interval"] == str(model.period.interval)
     assert ctx["config_hash"] == ""
     assert ctx["extensions"] == {}

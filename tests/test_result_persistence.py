@@ -305,6 +305,7 @@ def test_v2_generate_result_with_normalized_context(staging_dir):
         model_type="ww3",
         period_start=datetime(2024, 1, 1, tzinfo=timezone.utc),
         period_end=datetime(2024, 1, 2, tzinfo=timezone.utc),
+        period_interval="1h",
         output_dir="/tmp/output",
         staging_dir="/tmp/staging",
         config_hash="abc123def456",
@@ -342,6 +343,7 @@ def test_v2_generate_result_with_normalized_context(staging_dir):
     assert loaded.normalized_context.model_type == "ww3"
     assert loaded.normalized_context.period_start == normalized_ctx.period_start
     assert loaded.normalized_context.period_end == normalized_ctx.period_end
+    assert loaded.normalized_context.period_interval == "1h"
     assert loaded.normalized_context.output_dir == "/tmp/output"
     assert loaded.normalized_context.staging_dir == "/tmp/staging"
     assert loaded.normalized_context.config_hash == "abc123def456"
@@ -357,6 +359,7 @@ def test_v2_run_result_with_normalized_context(staging_dir):
         model_type="swan",
         period_start=datetime(2024, 2, 1, tzinfo=timezone.utc),
         period_end=datetime(2024, 2, 3, tzinfo=timezone.utc),
+        period_interval="3h",
         output_dir="/tmp/run_output",
         staging_dir="/tmp/run_staging",
         config_hash="fedcba654321",
@@ -394,6 +397,7 @@ def test_v2_run_result_with_normalized_context(staging_dir):
     assert loaded.schema_version == 2
     assert loaded.normalized_context is not None
     assert loaded.normalized_context.model_type == "swan"
+    assert loaded.normalized_context.period_interval == "3h"
     assert loaded.normalized_context.config_hash == "fedcba654321"
     assert loaded.normalized_context.extensions == {"swan_version": "41.31"}
 

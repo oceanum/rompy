@@ -220,6 +220,7 @@ def test_generate_sidecar_has_normalized_context_success(tmp_model_run):
         assert sidecar.normalized_context.model_type == "base"
         assert sidecar.normalized_context.period_start == datetime(2020, 1, 1, 0, 0, 0)
         assert sidecar.normalized_context.period_end == datetime(2020, 1, 2, 0, 0, 0)
+        assert sidecar.normalized_context.period_interval == "1:00:00"
         assert sidecar.normalized_context.output_dir == str(tmp_model_run.output_dir)
         assert sidecar.normalized_context.staging_dir == str(staging_dir)
         assert sidecar.normalized_context.config_hash != ""
@@ -245,6 +246,7 @@ def test_generate_sidecar_has_normalized_context_failure(tmp_model_run):
         assert sidecar.normalized_context.model_type == "base"
         assert sidecar.normalized_context.period_start == datetime(2020, 1, 1, 0, 0, 0)
         assert sidecar.normalized_context.period_end == datetime(2020, 1, 2, 0, 0, 0)
+        assert sidecar.normalized_context.period_interval == "1:00:00"
         assert sidecar.normalized_context.output_dir == str(tmp_model_run.output_dir)
         assert sidecar.normalized_context.staging_dir == str(staging_dir)
         assert sidecar.normalized_context.config_hash == ""

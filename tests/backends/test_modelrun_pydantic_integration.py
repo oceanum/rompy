@@ -411,8 +411,16 @@ class TestModelRunPydanticIntegration:
                 result = model_run.run(backend=config)
 
         assert result.success is True
-        assert result.artifacts == discovered
-        mock_validate.assert_called_once_with(str(model_run.output_dir))
+        # validate_outputs may return absolute paths; ModelRun.run normalizes
+        # artifact paths to be relative to the run output directory. Compare
+        # normalized paths to the result to avoid brittle absolute-path checks.
+        expected = [
+            Artifact(path=str(Path(a.path).relative_to(output_dir))) for a in discovered
+        ]
+        assert result.artifacts == expected
+        # validate_outputs should be called with the actual run output
+        # directory (including the run_id subdirectory in this test).
+        mock_validate.assert_called_once_with(str(output_dir))
 
     def test_run_success_normalizes_artifact_paths_to_run_output_dir(
         self, model_run, tmp_path

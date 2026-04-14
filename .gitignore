@@ -177,6 +177,9 @@ simulations/
 # AGENTS.md files (generated, not committed)
 AGENTS.md
 **/AGENTS.md
+.opencode
+.github/prompts
+
 
 # uv lock
 uv.lock

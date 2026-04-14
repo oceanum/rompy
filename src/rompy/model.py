@@ -12,7 +12,7 @@ import shutil
 import zipfile as zf
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union, cast
 
 from pydantic import Field
 
@@ -327,6 +327,7 @@ class ModelRun(RompyBaseModel):
                     model_type=model_type,
                     period_start=self.period.start,
                     period_end=self.period.end,
+                    period_interval=str(self.period.interval),
                     output_dir=str(self.output_dir),
                     staging_dir=str(self.staging_dir),
                     config_hash=self._compute_config_hash(self.staging_dir),
@@ -339,16 +340,19 @@ class ModelRun(RompyBaseModel):
                     staging_dir=str(self.staging_dir),
                     config_file=None,  # Could be extracted from config if available
                     success=True,
+                    error=None,
                     generated_files=generated_files,
                 )
 
                 # Build GenerateResultSidecar envelope
                 sidecar = GenerateResultSidecar(
                     created_at=datetime.now(timezone.utc),
+                    updated_at=None,
                     run_id=self.run_id,
                     staging_dir=str(self.staging_dir),
                     status="success",
                     success=True,
+                    error=None,
                     payload=generate_result,
                     normalized_context=normalized_ctx,
                 )
@@ -378,6 +382,7 @@ class ModelRun(RompyBaseModel):
                         model_type=model_type,
                         period_start=self.period.start,
                         period_end=self.period.end,
+                        period_interval=str(self.period.interval),
                         output_dir=str(self.output_dir),
                         staging_dir=str(self.staging_dir),
                         config_hash="",
@@ -386,6 +391,7 @@ class ModelRun(RompyBaseModel):
 
                     failure_sidecar = GenerateResultSidecar(
                         created_at=datetime.now(timezone.utc),
+                        updated_at=None,
                         run_id=self.run_id,
                         staging_dir=str(self.staging_dir),
                         status="failed",
@@ -509,6 +515,7 @@ class ModelRun(RompyBaseModel):
                 model_type=model_type,
                 period_start=self.period.start,
                 period_end=self.period.end,
+                period_interval=str(self.period.interval),
                 output_dir=str(self.output_dir) if self.output_dir else "",
                 staging_dir=str(workspace_dir) if workspace_dir else "",
                 config_hash=(
@@ -564,7 +571,7 @@ class ModelRun(RompyBaseModel):
                     success=False,
                     run_id=self.run_id,
                     backend_used=type(backend).__name__,
-                    output_dir=str(self.output_dir) if self.output_dir else None,
+                    output_dir=str(self.output_dir),
                     workspace_dir=workspace_dir,
                     error=f"Backend must be a subclass of BaseBackendConfig, got {type(backend).__name__}",
                     message="Invalid backend configuration",
@@ -583,6 +590,7 @@ class ModelRun(RompyBaseModel):
 
                     sidecar = RunResultSidecar(
                         created_at=datetime.now(timezone.utc),
+                        updated_at=None,
                         run_id=result.run_id,
                         staging_dir=str(workspace_dir),
                         status="failed",
@@ -609,12 +617,14 @@ class ModelRun(RompyBaseModel):
             )
 
             # Determine output/workspace directories
-            output_dir_path = None
+            output_dir_path: Optional[Path] = None
             if self.output_dir:
                 output_dir_path = Path(self.output_dir)
                 if self.run_id_subdir:
                     output_dir_path = output_dir_path / self.run_id
-            output_dir_str = str(output_dir_path) if output_dir_path else None
+            output_dir_str = (
+                str(output_dir_path) if output_dir_path else str(self.output_dir)
+            )
             workspace_dir_str = str(workspace_dir) if workspace_dir else None
             backend_class_name = type(backend).__name__.replace("Config", "")
             artifacts = []
@@ -646,6 +656,7 @@ class ModelRun(RompyBaseModel):
                 output_dir=output_dir_str,
                 workspace_dir=workspace_dir_str,
                 artifacts=artifacts,
+                error=None,
                 message=(
                     "Model execution completed successfully"
                     if success
@@ -669,6 +680,7 @@ class ModelRun(RompyBaseModel):
 
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
+                    updated_at=None,
                     run_id=result.run_id,
                     staging_dir=str(workspace_dir),
                     status="success" if result.success else "failed",
@@ -697,7 +709,7 @@ class ModelRun(RompyBaseModel):
                     if isinstance(backend, BaseBackendConfig)
                     else "unknown"
                 ),
-                output_dir=str(self.output_dir) if self.output_dir else None,
+                output_dir=str(self.output_dir),
                 workspace_dir=workspace_dir_str,
                 error=str(e),
                 message=f"Model execution failed with exception: {str(e)}",
@@ -716,6 +728,7 @@ class ModelRun(RompyBaseModel):
 
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
+                    updated_at=None,
                     run_id=result.run_id,
                     staging_dir=str(workspace_dir),
                     status="failed",
@@ -796,6 +809,10 @@ class ModelRun(RompyBaseModel):
 
             # Get processor class from config
             processor_class = processor.get_postprocessor_class()
+            if processor_class is None:
+                raise TypeError(
+                    f"processor config {type(processor).__name__} did not provide a postprocessor class"
+                )
             processor_instance = processor_class()
 
             # Extract processor-specific fields (exclude common base fields)
@@ -809,18 +826,22 @@ class ModelRun(RompyBaseModel):
 
             process_target = processor_input if processor_input is not None else self
             result = processor_instance.process(process_target, **processor_fields)
+            sidecar_error: Optional[str] = None
+            if not result.success:
+                sidecar_error = result.error
 
             # Write postprocess result sidecar
             from rompy.core.result_persistence import write_postprocess_result
 
             sidecar = PostprocessResultSidecar(
                 created_at=datetime.now(timezone.utc),
+                updated_at=None,
                 run_id=self.run_id,
                 staging_dir=str(self.staging_dir),
                 status="success" if result.success else "failed",
                 success=result.success,
-                error=result.error if hasattr(result, "error") else None,
-                payload=result,
+                error=sidecar_error,
+                payload=cast(PostprocessResult, result),
             )
             try:
                 write_postprocess_result(Path(self.staging_dir), sidecar)
@@ -833,7 +854,9 @@ class ModelRun(RompyBaseModel):
         except Exception as e:
             # Wrap any top-level exceptions in PostprocessFailure
             result = PostprocessFailure(
+                success=False,
                 run_id=self.run_id,
+                output_dir=str(self.staging_dir),
                 message=f"Postprocessing failed: {str(e)}",
                 error=str(e),
                 timing=TimingInfo(
@@ -847,6 +870,7 @@ class ModelRun(RompyBaseModel):
 
             sidecar = PostprocessResultSidecar(
                 created_at=datetime.now(timezone.utc),
+                updated_at=None,
                 run_id=self.run_id,
                 staging_dir=str(self.staging_dir),
                 status="failed",

@@ -13,13 +13,14 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import click
 import yaml
 
 import rompy
 from rompy.backends import DockerConfig, LocalConfig, SlurmConfig
+from rompy.core.responses import PipelineFailure, PostprocessFailure, PostprocessSuccess
 from rompy.logging import LogFormat, LoggingConfig, LogLevel, get_logger
 from rompy.model import PIPELINE_BACKENDS, POSTPROCESSORS, RUN_BACKENDS, ModelRun
 from rompy.templating import render_templates
@@ -34,9 +35,23 @@ installed = importlib.metadata.entry_points(group="rompy.config").names
 def _build_postprocess_model_run_from_sidecar(run_result_sidecar):
     """Build a minimal ModelRun for sidecar-driven postprocessing."""
     staging_dir = Path(run_result_sidecar.staging_dir)
+    ctx = run_result_sidecar.normalized_context
     model_run = ModelRun(
+        model_type="modelrun",
         run_id=run_result_sidecar.run_id,
+        period=rompy.core.time.TimeRange(
+            start=ctx.period_start,
+            end=ctx.period_end,
+            interval=ctx.period_interval,
+        )
+        if ctx is not None
+        else rompy.core.time.TimeRange(
+            start=datetime.now(),
+            end=datetime.now(),
+            interval="1h",
+        ),
         output_dir=staging_dir.parent,
+        delete_existing=False,
         run_id_subdir=True,
     )
     model_run._staging_dir = staging_dir
@@ -388,8 +403,15 @@ def run(
             ctx = generate_result.normalized_context
             staging = Path(ctx.staging_dir)
             model_run = ModelRun(
+                model_type="modelrun",
                 run_id=generate_result.run_id,
+                period=rompy.core.time.TimeRange(
+                    start=ctx.period_start,
+                    end=ctx.period_end,
+                    interval=ctx.period_interval,
+                ),
                 output_dir=Path(ctx.output_dir),
+                delete_existing=False,
                 run_id_subdir=True,
             )
             model_run._staging_dir = staging
@@ -670,7 +692,9 @@ def pipeline(
         logger.info(f"Running pipeline for: {model_run.config.model_type}")
         logger.info(f"Run ID: {model_run.run_id}")
         logger.info(
-            f"Pipeline: generate → run({backend_type}) → postprocess({processor_cfg.type})"
+            "Pipeline: generate → run(%s) → postprocess(%s)",
+            backend_type,
+            processor_cfg.model_dump(exclude_none=True).get("type", "unknown"),
         )
 
         start_time = datetime.now()
@@ -703,8 +727,8 @@ def pipeline(
                     f"Pipeline duration: {results.timing.duration_seconds:.2f}s"
                 )
         else:
-            # results is PipelineFailure, has 'error' attribute
-            error_msg = results.error if hasattr(results, "error") else "Unknown error"
+            failure_result = cast(PipelineFailure, results)
+            error_msg = failure_result.error
             logger.error(f"❌ Pipeline failed: {error_msg}")
             sys.exit(1)
 
@@ -882,6 +906,7 @@ def postprocess(
         from rompy.postprocess.config import _load_processor_config
 
         processor_cfg = _load_processor_config(processor_config)
+        model_run: Optional[ModelRun] = None
 
         from pathlib import Path
         from rompy.core.result_persistence import (
@@ -922,6 +947,8 @@ def postprocess(
         # If user provided an explicit run_result sidecar, validate upgrade and build
         # a minimal ModelRun from the normalized_context. Wrap upgrade check in
         # try/except so we can report a clear error for v1 sidecars.
+        model_run_for_postprocess: ModelRun
+        processor_input: Optional[SimpleNamespace]
         try:
             if run_result_path:
                 if run_result.normalized_context is None:
@@ -929,9 +956,17 @@ def postprocess(
                         "Run result sidecar is v1 and missing normalized_context. "
                         "Re-run 'rompy run' to generate a v2 sidecar with normalized_context."
                     )
-                model_run = _build_postprocess_model_run_from_sidecar(run_result)
+                model_run_for_postprocess = _build_postprocess_model_run_from_sidecar(
+                    run_result
+                )
                 processor_input = _build_postprocess_processor_input(run_result)
             else:
+                if model_run is None:
+                    raise ValueError(
+                        "Model configuration could not be resolved for postprocess"
+                    )
+                resolved_model_run = model_run
+                model_run_for_postprocess = resolved_model_run
                 processor_input = None
         except ValueError as e:
             logger.error(f"❌ Invalid run result sidecar: {e}")
@@ -947,10 +982,17 @@ def postprocess(
 
         logger.info(
             "Running postprocessing for: %s",
-            getattr(getattr(model_run, "config", None), "model_type", "sidecar"),
+            getattr(
+                getattr(model_run_for_postprocess, "config", None),
+                "model_type",
+                "sidecar",
+            ),
         )
-        logger.info(f"Run ID: {model_run.run_id}")
-        logger.info(f"Postprocessor: {processor_cfg.type}")
+        logger.info(f"Run ID: {model_run_for_postprocess.run_id}")
+        logger.info(
+            "Postprocessor: %s",
+            processor_cfg.model_dump(exclude_none=True).get("type", "unknown"),
+        )
 
         if not run_result.success and not force:
             logger.error(
@@ -974,18 +1016,21 @@ def postprocess(
 
         # Check for existing postprocess result (idempotency guard)
         try:
-            postprocess_result = load_postprocess_result(model_run.staging_dir)
+            postprocess_result = load_postprocess_result(
+                model_run_for_postprocess.staging_dir
+            )
             if postprocess_result.success:
                 if not force:
                     logger.info(
                         f"✅ Postprocessing already completed successfully. "
-                        f"Result stored in: {model_run.staging_dir / POSTPROCESS_RESULT_FILENAME}\n"
+                        f"Result stored in: {model_run_for_postprocess.staging_dir / POSTPROCESS_RESULT_FILENAME}\n"
                         f"Use --force to reprocess."
                     )
 
                     if json_output:
                         postprocess_sidecar_path = (
-                            model_run.staging_dir / POSTPROCESS_RESULT_FILENAME
+                            model_run_for_postprocess.staging_dir
+                            / POSTPROCESS_RESULT_FILENAME
                         )
                         if postprocess_sidecar_path.exists():
                             print(postprocess_sidecar_path.read_text())
@@ -1014,31 +1059,36 @@ def postprocess(
 
         # Run postprocessing
         start_time = datetime.now()
-        results = model_run.postprocess(
+        results = model_run_for_postprocess.postprocess(
             processor=processor_cfg,
             processor_input=processor_input,
-            output_dir=output_dir or str(model_run.staging_dir),
+            output_dir=output_dir or str(model_run_for_postprocess.staging_dir),
             validate_outputs=validate_outputs,
         )
         elapsed = datetime.now() - start_time
 
         # Report results
-        if results.success:
+        if results.success is True:
+            success_result = cast(PostprocessSuccess, results)
             logger.info(
                 f"✅ Postprocessing completed successfully in {elapsed.total_seconds():.2f}s"
             )
-            if hasattr(results, "output_files") and results.output_files:
+            if success_result.file_count is not None:
                 logger.info(
-                    f"Output files: {len(results.output_files)} files generated"
+                    f"Output files: {success_result.file_count} files generated"
                 )
-            if hasattr(results, "timing") and results.timing:
+            elif success_result.artifacts:
                 logger.info(
-                    f"Processing duration: {results.timing.duration_seconds:.2f}s"
+                    f"Output files: {len(success_result.artifacts)} files generated"
+                )
+            if success_result.timing:
+                logger.info(
+                    f"Processing duration: {success_result.timing.duration_seconds:.2f}s"
                 )
 
             if json_output:
                 postprocess_sidecar_path = (
-                    model_run.staging_dir / POSTPROCESS_RESULT_FILENAME
+                    model_run_for_postprocess.staging_dir / POSTPROCESS_RESULT_FILENAME
                 )
                 if postprocess_sidecar_path.exists():
                     print(postprocess_sidecar_path.read_text())
@@ -1049,13 +1099,13 @@ def postprocess(
                         )
                     )
         else:
-            # results is PostprocessFailure
-            error_msg = results.error if hasattr(results, "error") else "Unknown error"
+            failure_result = cast(PostprocessFailure, results)
+            error_msg = failure_result.error
             logger.error(f"❌ Postprocessing failed: {error_msg}")
 
             if json_output:
                 postprocess_sidecar_path = (
-                    model_run.staging_dir / POSTPROCESS_RESULT_FILENAME
+                    model_run_for_postprocess.staging_dir / POSTPROCESS_RESULT_FILENAME
                 )
                 if postprocess_sidecar_path.exists():
                     print(postprocess_sidecar_path.read_text())
