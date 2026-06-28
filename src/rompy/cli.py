@@ -817,7 +817,7 @@ def generate(
 
 
 @cli.command()
-@click.argument("config", type=click.Path(exists=True), required=False)
+@click.argument("staging", type=click.Path(exists=True), required=True)
 @click.option(
     "--processor-config",
     type=click.Path(exists=True),
@@ -829,13 +829,6 @@ def generate(
     "--validate-outputs/--no-validate",
     default=True,
     help="Validate outputs exist (default: True)",
-)
-@click.option(
-    "--run-result",
-    "run_result_path",
-    type=click.Path(exists=True),
-    default=None,
-    help="Path to run_result.json sidecar (default: auto-discover from staging dir)",
 )
 @click.option(
     "--force",
@@ -851,11 +844,10 @@ def generate(
 )
 @add_common_options
 def postprocess(
-    config,
+    staging,
     processor_config,
     output_dir,
     validate_outputs,
-    run_result_path,
     force,
     json_output,
     verbose,
@@ -863,50 +855,39 @@ def postprocess(
     show_warnings,
     ascii_only,
     simple_logs,
-    config_from_env,
+    config_from_env,  # noqa: ARG001 — injected by @add_common_options, unused in sidecar-only path
 ):
     """Run postprocessing on model outputs using the specified postprocessor.
 
     Requires run_result.json from a prior 'rompy run'.
-    Provide either a model config file or --run-result PATH.
-    Use --run-result PATH to specify an explicit sidecar location.
+    STAGING is a path to the staging directory (auto-discovers run_result.json)
+    or a direct path to a run_result.json file.
+
     Use --force to reprocess even if run_result.json shows success=false,
       or to reprocess even if postprocessing already completed.
     Writes postprocess_result.json to the staging directory after completion.
     Use --json to emit the sidecar JSON to stdout.
 
     Examples:
-        # Config-first: auto-discover from staging dir
-        rompy postprocess config.yml --processor-config processor.yml
-        # (exits 1 if run_result.json not found in staging dir)
+        # Directory: auto-discovers run_result.json inside
+        rompy postprocess simulations/glob3 --processor-config processor.yml
 
-        # Sidecar-only: explicit run result path
-        rompy postprocess --run-result /path/to/run_result.json --processor-config processor.yml
+        # Direct path to run_result.json
+        rompy postprocess simulations/glob3/run_result.json --processor-config processor.yml
 
         # Force rerun
-        rompy postprocess config.yml --processor-config processor.yml --force
+        rompy postprocess simulations/glob3 --processor-config processor.yml --force
 
         # Machine-readable output
-        rompy postprocess config.yml --processor-config processor.yml --json
+        rompy postprocess simulations/glob3 --processor-config processor.yml --json
     """
     configure_logging(verbose, log_dir, simple_logs, ascii_only, show_warnings)
-
-    # Validate config source
-    if config_from_env and config:
-        raise click.UsageError("Cannot specify both config file and --config-from-env")
-    if config_from_env and run_result_path:
-        raise click.UsageError("Cannot use both --config-from-env and --run-result")
-    if not config_from_env and not config and not run_result_path:
-        raise click.UsageError(
-            "Must specify either config file, --config-from-env, or --run-result"
-        )
 
     try:
         # Load processor configuration
         from rompy.postprocess.config import _load_processor_config
 
         processor_cfg = _load_processor_config(processor_config)
-        model_run: Optional[ModelRun] = None
 
         from pathlib import Path
         from rompy.core.result_persistence import (
@@ -915,12 +896,32 @@ def postprocess(
             POSTPROCESS_RESULT_FILENAME,
         )
 
-        if run_result_path:
-            sidecar_path = Path(run_result_path)
+        # Resolve staging: directory → auto-discover run_result.json, .json → use directly
+        staging_path = Path(staging)
+        if staging_path.is_dir():
+            sidecar_path = staging_path / "run_result.json"
+        elif staging_path.suffix == ".json":
+            sidecar_path = staging_path
         else:
-            config_data = load_config(config, from_env=config_from_env)
-            model_run = ModelRun(**config_data)
-            sidecar_path = model_run.staging_dir / "run_result.json"
+            logger.error(
+                f"❌ STAGING must be a directory containing run_result.json "
+                f"or a direct path to a run_result.json file. Got: {staging_path}"
+            )
+
+            if json_output:
+                print(
+                    json.dumps(
+                        {
+                            "success": False,
+                            "error": (
+                                f"STAGING must be a directory or .json file. "
+                                f"Got: {staging_path}"
+                            ),
+                        }
+                    )
+                )
+
+            sys.exit(1)
 
         logger.info(f"Loading run result from: {sidecar_path}")
 
@@ -944,30 +945,17 @@ def postprocess(
 
             sys.exit(1)
 
-        # If user provided an explicit run_result sidecar, validate upgrade and build
-        # a minimal ModelRun from the normalized_context. Wrap upgrade check in
-        # try/except so we can report a clear error for v1 sidecars.
-        model_run_for_postprocess: ModelRun
-        processor_input: Optional[SimpleNamespace]
+        # Validate sidecar version and build model run + processor input
         try:
-            if run_result_path:
-                if run_result.normalized_context is None:
-                    raise ValueError(
-                        "Run result sidecar is v1 and missing normalized_context. "
-                        "Re-run 'rompy run' to generate a v2 sidecar with normalized_context."
-                    )
-                model_run_for_postprocess = _build_postprocess_model_run_from_sidecar(
-                    run_result
+            if run_result.normalized_context is None:
+                raise ValueError(
+                    "Run result sidecar is v1 and missing normalized_context. "
+                    "Re-run 'rompy run' to generate a v2 sidecar with normalized_context."
                 )
-                processor_input = _build_postprocess_processor_input(run_result)
-            else:
-                if model_run is None:
-                    raise ValueError(
-                        "Model configuration could not be resolved for postprocess"
-                    )
-                resolved_model_run = model_run
-                model_run_for_postprocess = resolved_model_run
-                processor_input = None
+            model_run_for_postprocess = _build_postprocess_model_run_from_sidecar(
+                run_result
+            )
+            processor_input = _build_postprocess_processor_input(run_result)
         except ValueError as e:
             logger.error(f"❌ Invalid run result sidecar: {e}")
 

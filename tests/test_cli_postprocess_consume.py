@@ -126,11 +126,6 @@ def test_postprocess_happy_path_autodiscover(
 ):
     staging_dir, model = staging_dir_with_success_sidecar
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -138,7 +133,7 @@ def test_postprocess_happy_path_autodiscover(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -155,11 +150,6 @@ def test_postprocess_explicit_run_result_path(
 ):
     staging_dir, model = staging_dir_with_success_sidecar
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -169,11 +159,9 @@ def test_postprocess_explicit_run_result_path(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(explicit_path),
             "--processor-config",
             str(processor_config),
-            "--run-result",
-            str(explicit_path),
         ],
         catch_exceptions=False,
     )
@@ -277,7 +265,6 @@ def test_postprocess_explicit_run_result_passes_artifacts_to_processor(
         cli,
         [
             "postprocess",
-            "--run-result",
             str(staging_dir / "run_result.json"),
             "--processor-config",
             str(processor_config),
@@ -393,7 +380,6 @@ def test_postprocess_explicit_run_result_filters_missing_legacy_artifacts(
         cli,
         [
             "postprocess",
-            "--run-result",
             str(staging_dir / "run_result.json"),
             "--processor-config",
             str(processor_config),
@@ -415,11 +401,7 @@ def test_postprocess_missing_sidecar_fails(cli_runner, tmp_path):
     )
     staging_dir = model.staging_dir
     staging_dir.mkdir(parents=True, exist_ok=True)
-
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
+    # Deliberately omit writing run_result.json
 
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
@@ -428,7 +410,7 @@ def test_postprocess_missing_sidecar_fails(cli_runner, tmp_path):
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -451,11 +433,6 @@ def test_postprocess_corrupt_json_fails(cli_runner, tmp_path):
     sidecar_path = staging_dir / "run_result.json"
     sidecar_path.write_text("{invalid json!!")
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -463,14 +440,13 @@ def test_postprocess_corrupt_json_fails(cli_runner, tmp_path):
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
     )
 
     assert result.exit_code == 1
-    # JSON parse error should be surfaced as postprocessing failure
     assert "Postprocessing failed" in result.output
     assert "Expecting property name" in result.output
 
@@ -495,11 +471,6 @@ def test_postprocess_schema_mismatch_fails(cli_runner, tmp_path):
         )
     )
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -507,14 +478,13 @@ def test_postprocess_schema_mismatch_fails(cli_runner, tmp_path):
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
     )
 
     assert result.exit_code == 1
-    # Schema mismatch should be surfaced as postprocessing failure
     assert "Postprocessing failed" in result.output
     assert "generate_result" in result.output
 
@@ -524,11 +494,6 @@ def test_postprocess_success_false_no_force_fails(
 ):
     staging_dir, model = staging_dir_with_failed_sidecar
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -536,7 +501,7 @@ def test_postprocess_success_false_no_force_fails(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -553,11 +518,6 @@ def test_postprocess_success_false_with_force_succeeds(
 ):
     staging_dir, model = staging_dir_with_failed_sidecar
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -565,7 +525,7 @@ def test_postprocess_success_false_with_force_succeeds(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
             "--force",
@@ -588,11 +548,7 @@ def test_postprocess_force_does_not_bypass_missing_sidecar(cli_runner, tmp_path)
     )
     staging_dir = model.staging_dir
     staging_dir.mkdir(parents=True, exist_ok=True)
-
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
+    # Deliberately omit writing run_result.json
 
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
@@ -601,7 +557,7 @@ def test_postprocess_force_does_not_bypass_missing_sidecar(cli_runner, tmp_path)
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
             "--force",
@@ -625,11 +581,6 @@ def test_postprocess_force_does_not_bypass_corrupt_sidecar(cli_runner, tmp_path)
     sidecar_path = staging_dir / "run_result.json"
     sidecar_path.write_text("{invalid json!!")
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -637,7 +588,7 @@ def test_postprocess_force_does_not_bypass_corrupt_sidecar(cli_runner, tmp_path)
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
             "--force",

@@ -6,6 +6,7 @@ from click.testing import CliRunner
 
 from rompy.cli import cli
 from rompy.core.responses import (
+    NormalizedContext,
     ModelRunResult,
     PostprocessSuccess,
     PostprocessFailure,
@@ -48,12 +49,23 @@ def staging_with_successful_postprocess_result(tmp_path):
         output_dir=str(staging_dir),
         timing=timing,
     )
+    normalized = NormalizedContext(
+        model_type="modelrun",
+        period_start=datetime.now(timezone.utc),
+        period_end=datetime.now(timezone.utc),
+        period_interval="2h",
+        output_dir=str(model.output_dir),
+        staging_dir=str(staging_dir),
+        config_hash="",
+        extensions={},
+    )
     run_sidecar = RunResultSidecar(
         created_at=datetime.now(timezone.utc),
         run_id="test-idempotency",
         staging_dir=str(staging_dir),
         status="success",
         success=True,
+        normalized_context=normalized,
         payload=run_result,
     )
     write_run_result(staging_dir, run_sidecar)
@@ -100,12 +112,23 @@ def staging_with_failed_postprocess_result(tmp_path):
         output_dir=str(staging_dir),
         timing=timing,
     )
+    normalized = NormalizedContext(
+        model_type="modelrun",
+        period_start=datetime.now(timezone.utc),
+        period_end=datetime.now(timezone.utc),
+        period_interval="2h",
+        output_dir=str(model.output_dir),
+        staging_dir=str(staging_dir),
+        config_hash="",
+        extensions={},
+    )
     run_sidecar = RunResultSidecar(
         created_at=datetime.now(timezone.utc),
         run_id="test-idempotency-failed",
         staging_dir=str(staging_dir),
         status="success",
         success=True,
+        normalized_context=normalized,
         payload=run_result,
     )
     write_run_result(staging_dir, run_sidecar)
@@ -153,12 +176,23 @@ def staging_with_run_result_only(tmp_path):
         output_dir=str(staging_dir),
         timing=timing,
     )
+    normalized = NormalizedContext(
+        model_type="modelrun",
+        period_start=datetime.now(timezone.utc),
+        period_end=datetime.now(timezone.utc),
+        period_interval="2h",
+        output_dir=str(model.output_dir),
+        staging_dir=str(staging_dir),
+        config_hash="",
+        extensions={},
+    )
     run_sidecar = RunResultSidecar(
         created_at=datetime.now(timezone.utc),
         run_id="test-first-postprocess",
         staging_dir=str(staging_dir),
         status="success",
         success=True,
+        normalized_context=normalized,
         payload=run_result,
     )
     write_run_result(staging_dir, run_sidecar)
@@ -175,11 +209,6 @@ def test_postprocess_skips_when_already_completed(
     original_content = original_sidecar.read_text()
     original_data = json.loads(original_content)
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -187,7 +216,7 @@ def test_postprocess_skips_when_already_completed(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -216,11 +245,6 @@ def test_postprocess_reruns_when_force_specified(
 
     time.sleep(0.01)
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -228,7 +252,7 @@ def test_postprocess_reruns_when_force_specified(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
             "--force",
@@ -255,11 +279,6 @@ def test_postprocess_executes_normally_on_first_run(
 ):
     staging_dir, model = staging_with_run_result_only
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -267,7 +286,7 @@ def test_postprocess_executes_normally_on_first_run(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -292,11 +311,6 @@ def test_postprocess_continues_on_corrupt_postprocess_result(
     corrupt_sidecar = staging_dir / POSTPROCESS_RESULT_FILENAME
     corrupt_sidecar.write_text("{invalid json!!")
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -304,7 +318,7 @@ def test_postprocess_continues_on_corrupt_postprocess_result(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -336,11 +350,6 @@ def test_postprocess_continues_on_schema_mismatch_postprocess_result(
         )
     )
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -348,7 +357,7 @@ def test_postprocess_continues_on_schema_mismatch_postprocess_result(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
@@ -374,11 +383,6 @@ def test_postprocess_reruns_when_previous_attempt_failed(
     original_data = json.loads(original_sidecar.read_text())
     assert original_data["success"] is False, "Fixture should create failed sidecar"
 
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        f"model_type: modelrun\nrun_id: {model.run_id}\noutput_dir: {model.output_dir}\nrun_id_subdir: true\n"
-    )
-
     processor_config = tmp_path / "processor.yml"
     processor_config.write_text("type: noop\n")
 
@@ -386,7 +390,7 @@ def test_postprocess_reruns_when_previous_attempt_failed(
         cli,
         [
             "postprocess",
-            str(config_path),
+            str(staging_dir),
             "--processor-config",
             str(processor_config),
         ],
