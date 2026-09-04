@@ -95,7 +95,12 @@ class DataBlob(DataBase):
         default=False,
         description="Whether to create a symbolic link instead of copying the file",
     )
-    _copied: Optional[str] = PrivateAttr(default=None)
+    _copied: Optional[Path] = PrivateAttr(default=None)
+
+    @property
+    def copied_path(self) -> Optional[Path]:
+        """Return the destination created by the most recent successful get()."""
+        return self._copied
 
     @model_validator(mode="after")
     def validate_link_scheme_compat(self):
@@ -154,7 +159,7 @@ class DataBlob(DataBase):
             uri=str(self.source), destdir=destdir, name=name, link=self.link
         )
 
-        self._copied = str(outfile)
+        self._copied = outfile
         return outfile
 
 
