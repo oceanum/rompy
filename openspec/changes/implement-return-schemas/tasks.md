@@ -53,17 +53,22 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 
 ## #6 — canonical fixtures and adversarial validation (follow-up)
 
-- [ ] Create frozen executable success/failure/malformed/legacy fixtures and
+- [x] Create frozen executable success/failure/malformed/legacy fixtures and
   publish hashes.
-- [ ] Validate fresh-process replay and all documented JSON examples after #4/#5
+- [x] Validate fresh-process replay and all documented JSON examples after #4/#5
   implement the contract.
-- [ ] Add adversarial artifact, URI, traversal, version, and contradiction cases.
-- [ ] Publish frozen hashes for the executable fixture corpus.
+- [x] Add adversarial artifact, URI, traversal, version, and contradiction cases.
+- [x] Publish frozen hashes for the executable fixture corpus.
 
-## Explicit non-goals for this change
+## Historical issue #3 scope boundary
 
-- Do not edit runtime source, implementation tests, plugins, dependencies,
-  generated files, or unrelated docs.
-- Do not add a migration reader or a new shared package.
-- Do not add the frozen fixture corpus assigned to #6.
-- Do not mark #5 or #6 implementation complete; #4 core schema, adapter, and persistence tasks above are complete, while producer call-site adoption remains #5.
+The following non-goals record the boundary of the earlier issue #3
+contract-definition phase. They do not prohibit the completed follow-up work
+owned by #4, #5, or #6 above.
+
+- During issue #3, do not edit runtime source, implementation tests, plugins,
+  dependencies, generated files, or unrelated docs.
+- During issue #3, do not add a migration reader or a new shared package.
+- During issue #3, do not add the frozen fixture corpus assigned to #6.
+- During issue #3, #5 and #6 remained follow-up issues; their implementation
+  and completion are recorded in their respective sections above.

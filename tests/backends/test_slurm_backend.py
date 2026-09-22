@@ -6,6 +6,7 @@ provides proper validation, and integrates with the SLURM execution backend.
 """
 
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,17 @@ import pytest
 from pydantic import ValidationError
 
 from rompy.backends import SlurmConfig
+from rompy.core.responses import GenerateSuccess, TimingInfo
+
+
+def generated_result(model_run, staging_dir):
+    now = datetime.now(timezone.utc)
+    return GenerateSuccess(
+        run_id=model_run.run_id,
+        staging_dir=str(staging_dir),
+        generated_files=[],
+        timing=TimingInfo(start_time=now, end_time=now),
+    )
 
 
 def is_slurm_available():
@@ -587,7 +599,7 @@ class TestSlurmRunBackend:
                 mock_wait.return_value = True  # Job completed successfully
 
                 # Set up the mock model run to return the staging directory
-                mock_model_run.generate.return_value = staging_dir
+                mock_model_run.generate.return_value = generated_result(mock_model_run, staging_dir)
 
                 result = backend.run(mock_model_run, basic_config)
 
@@ -613,7 +625,7 @@ class TestSlurmRunBackend:
                 mock_submit.return_value = None  # Submission failed
 
                 # Set up the mock model run
-                mock_model_run.generate.return_value = staging_dir
+                mock_model_run.generate.return_value = generated_result(mock_model_run, staging_dir)
 
                 result = backend.run(mock_model_run, basic_config)
 

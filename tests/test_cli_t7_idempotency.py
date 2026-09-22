@@ -7,7 +7,7 @@ from click.testing import CliRunner
 from rompy.cli import cli
 from rompy.core.responses import (
     NormalizedContext,
-    ModelRunResult,
+    ModelRunSuccess,
     PostprocessSuccess,
     PostprocessFailure,
     PostprocessResultSidecar,
@@ -42,18 +42,21 @@ def staging_with_successful_postprocess_result(tmp_path):
         end_time=datetime.now(timezone.utc),
     )
 
-    run_result = ModelRunResult(
+    run_result = ModelRunSuccess(
         success=True,
         run_id="test-idempotency",
         backend_used="LocalBackend",
         output_dir=str(staging_dir),
         timing=timing,
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
     )
     normalized = NormalizedContext(
         model_type="modelrun",
         period_start=datetime.now(timezone.utc),
         period_end=datetime.now(timezone.utc),
-        period_interval="2h",
+        period_interval=7200.0,
         output_dir=str(model.output_dir),
         staging_dir=str(staging_dir),
         config_hash="",
@@ -76,6 +79,9 @@ def staging_with_successful_postprocess_result(tmp_path):
         output_dir=str(staging_dir),
         validated=True,
         timing=timing,
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
     )
     postprocess_sidecar = PostprocessResultSidecar(
         created_at=datetime.now(timezone.utc),
@@ -105,18 +111,21 @@ def staging_with_failed_postprocess_result(tmp_path):
         end_time=datetime.now(timezone.utc),
     )
 
-    run_result = ModelRunResult(
+    run_result = ModelRunSuccess(
         success=True,
         run_id="test-idempotency-failed",
         backend_used="LocalBackend",
         output_dir=str(staging_dir),
         timing=timing,
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
     )
     normalized = NormalizedContext(
         model_type="modelrun",
         period_start=datetime.now(timezone.utc),
         period_end=datetime.now(timezone.utc),
-        period_interval="2h",
+        period_interval=7200.0,
         output_dir=str(model.output_dir),
         staging_dir=str(staging_dir),
         config_hash="",
@@ -139,6 +148,9 @@ def staging_with_failed_postprocess_result(tmp_path):
         output_dir=str(staging_dir),
         error="Previous processing failed",
         timing=timing,
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
     )
     postprocess_sidecar = PostprocessResultSidecar(
         created_at=datetime.now(timezone.utc),
@@ -169,18 +181,21 @@ def staging_with_run_result_only(tmp_path):
         end_time=datetime.now(timezone.utc),
     )
 
-    run_result = ModelRunResult(
+    run_result = ModelRunSuccess(
         success=True,
         run_id="test-first-postprocess",
         backend_used="LocalBackend",
         output_dir=str(staging_dir),
         timing=timing,
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
     )
     normalized = NormalizedContext(
         model_type="modelrun",
         period_start=datetime.now(timezone.utc),
         period_end=datetime.now(timezone.utc),
-        period_interval="2h",
+        period_interval=7200.0,
         output_dir=str(model.output_dir),
         staging_dir=str(staging_dir),
         config_hash="",

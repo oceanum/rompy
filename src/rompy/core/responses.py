@@ -398,14 +398,17 @@ class _SidecarBase(RompyBaseModel):
         return None if value is None else _utc(value, "sidecar timestamp")
 
     def _coherent(self, payload: Any, expected_kind: str) -> None:
+        mismatches = []
         if self.run_id != payload.run_id:
-            raise ValueError(
+            mismatches.append(
                 f"envelope/payload run_id mismatch: {self.run_id!r} != {payload.run_id!r}"
             )
         if self.success != payload.success:
-            raise ValueError(
+            mismatches.append(
                 f"envelope/payload success mismatch: {self.success!r} != {payload.success!r}"
             )
+        if mismatches:
+            raise ValueError("; ".join(mismatches))
         expected_status = "success" if payload.success else "failed"
         if self.status != expected_status:
             raise ValueError(
