@@ -12,6 +12,7 @@ from rompy.core.responses import (
     GenerateResultSidecar,
     GenerateSuccess,
     LocalArtifact,
+    ModelRunFailure,
     ModelRunSuccess,
     NormalizedContext,
     PostprocessResultSidecar,
@@ -65,6 +66,8 @@ def postprocess_sidecar() -> PostprocessResultSidecar:
         validated=True,
         timing=timing(),
         artifacts=[LocalArtifact(path="outputs/waves.nc")],
+        expected_outputs=[],
+        missing_outputs=[],
     )
     return PostprocessResultSidecar(
         run_id="run-1", status="success", success=True, payload=payload
@@ -107,6 +110,42 @@ def test_wire_json_has_numeric_duration_and_metadata(tmp_path):
     assert raw["schema_version"] == 2
     assert raw["payload"]["timing"]["duration_seconds"] == 2.25
     assert raw["payload"]["metadata"] == {"attempt": 1, "labels": ["canonical"]}
+    assert "generated_at" not in raw["payload"]
+
+
+def test_nonfinite_constructed_wire_value_is_rejected_by_json_serializer(tmp_path):
+    timing_value = TimingInfo.model_construct(
+        start_time=START, end_time=START, duration_seconds=float("nan")
+    )
+    payload = ModelRunSuccess.model_construct(
+        run_id="run-1",
+        backend_used="local",
+        output_dir="results/run-1",
+        timing=timing_value,
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
+        metadata={},
+        persistence_diagnostic=None,
+        success=True,
+        workspace_dir=None,
+        message=None,
+    )
+    sidecar = RunResultSidecar.model_construct(
+        schema_version=2,
+        run_id="run-1",
+        status="success",
+        success=True,
+        error=None,
+        created_at=None,
+        updated_at=None,
+        staging_dir=None,
+        normalized_context=None,
+        kind="run_result",
+        payload=payload,
+    )
+    with pytest.raises(ValueError, match="Out of range float values"):
+        result_persistence.write_run_result(tmp_path, sidecar)
 
 
 def test_repeated_writes_are_byte_deterministic(tmp_path):
@@ -189,6 +228,51 @@ def test_write_failure_cleans_temp_and_preserves_existing_destination(tmp_path, 
     monkeypatch.setattr(result_persistence.os, "fdopen", real_fdopen)
 
 
+def test_persist_result_returns_typed_failure_without_primary_error(tmp_path, monkeypatch):
+    result = run_sidecar().payload
+    monkeypatch.setattr(
+        result_persistence,
+        "_atomic_write",
+        lambda *_: (_ for _ in ()).throw(OSError("temp write failed")),
+    )
+    returned = result_persistence.persist_result(result, run_sidecar(), tmp_path)
+    assert isinstance(returned, ModelRunFailure)
+    assert returned.error == "temp write failed"
+    assert returned.persistence_diagnostic.error == "temp write failed"
+    assert returned.persistence_diagnostic.primary_error is None
+
+
+def test_persist_result_preserves_supplied_primary_error(tmp_path, monkeypatch):
+    failure = ModelRunFailure(
+        run_id="run-1",
+        backend_used="local",
+        error="model operation failed",
+        timing=timing(),
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
+    )
+    sidecar = RunResultSidecar(
+        run_id="run-1",
+        status="failed",
+        success=False,
+        error="model operation failed",
+        payload=failure,
+    )
+    monkeypatch.setattr(
+        result_persistence,
+        "_atomic_write",
+        lambda *_: (_ for _ in ()).throw(OSError("directory fsync failed")),
+    )
+    returned = result_persistence.persist_result(
+        failure, sidecar, tmp_path, primary_error="model operation failed"
+    )
+    assert isinstance(returned, ModelRunFailure)
+    assert returned.error == "model operation failed"
+    assert returned.persistence_diagnostic.error == "directory fsync failed"
+    assert returned.persistence_diagnostic.primary_error == "model operation failed"
+
+
 def test_replace_failure_cleans_temp_and_preserves_existing_destination(tmp_path, monkeypatch):
     path = result_persistence.write_run_result(tmp_path, run_sidecar())
     previous = path.read_bytes()
@@ -234,6 +318,23 @@ def test_non_serializable_metadata_is_rejected_before_filesystem_write(tmp_path)
             timing=timing(),
             metadata={"bad": object()},
         )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_nonfinite_numeric_values_are_rejected_and_not_written(tmp_path):
+    for value in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError, match="finite"):
+            NormalizedContext(
+                model_type="ww3",
+                period_start=START,
+                period_end=START + timedelta(days=1),
+                period_interval=value,
+                output_dir="results",
+                staging_dir="staging",
+                config_hash="abc",
+            )
+        with pytest.raises(ValidationError, match="finite"):
+            TimingInfo(start_time=START, end_time=START, duration_seconds=value)
     assert list(tmp_path.iterdir()) == []
 
 

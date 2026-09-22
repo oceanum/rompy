@@ -7,6 +7,7 @@ one of the concrete sidecar loaders) to deserialize a union.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -82,9 +83,15 @@ class NormalizedContext(RompyBaseModel):
     def numeric_interval(cls, value: Any) -> float:
         if isinstance(value, (str, bool)) or not isinstance(value, (int, float)):
             raise ValueError("period_interval must be numeric seconds")  # noqa: TRY004
-        if value < 0:
+        try:
+            numeric = float(value)
+        except OverflowError as exc:
+            raise ValueError("period_interval must be finite numeric seconds") from exc
+        if not math.isfinite(numeric):
+            raise ValueError("period_interval must be finite numeric seconds")
+        if numeric < 0:
             raise ValueError("period_interval must be nonnegative")
-        return float(value)
+        return numeric
 
     @model_validator(mode="after")
     def ordered_period(self) -> NormalizedContext:
@@ -163,7 +170,13 @@ class TimingInfo(RompyBaseModel):
             return value
         if isinstance(value, (str, bool)) or not isinstance(value, (int, float)):
             raise ValueError("duration_seconds must be numeric seconds")  # noqa: TRY004
-        return float(value)
+        try:
+            numeric = float(value)
+        except OverflowError as exc:
+            raise ValueError("duration_seconds must be finite numeric seconds") from exc
+        if not math.isfinite(numeric):
+            raise ValueError("duration_seconds must be finite numeric seconds")
+        return numeric
 
     @model_validator(mode="after")
     def validate_interval(self) -> TimingInfo:
@@ -206,9 +219,6 @@ class GenerateSuccess(_ResultBase):
     generated_files: list[str]
     timing: TimingInfo
     config_file: str | None = None
-    # Kept as a non-wire compatibility input for old producers; timing is the
-    # canonical completion timestamp.
-    generated_at: datetime | None = None
 
 
 class GenerateFailure(_ResultBase):
@@ -218,7 +228,6 @@ class GenerateFailure(_ResultBase):
     timing: TimingInfo
     staging_dir: str | None = None
     config_file: str | None = None
-    generated_at: datetime | None = None
 
 
 GenerateResult = Annotated[
@@ -227,9 +236,9 @@ GenerateResult = Annotated[
 
 
 class _ExecutionEvidence(_ResultBase):
-    artifacts: list[ArtifactIdentity] = Field(default_factory=list)
-    expected_outputs: list[ArtifactIdentity] = Field(default_factory=list)
-    missing_outputs: list[ArtifactIdentity] = Field(default_factory=list)
+    artifacts: list[ArtifactIdentity]
+    expected_outputs: list[ArtifactIdentity]
+    missing_outputs: list[ArtifactIdentity]
 
 
 class ModelRunSuccess(_ExecutionEvidence):
@@ -292,7 +301,7 @@ class PipelineSuccess(_ResultBase):
     output_dir: str
     postprocess_results: PostprocessSuccess
     timing: TimingInfo
-    stage_timings: list[StageTiming] = Field(default_factory=list)
+    stage_timings: list[StageTiming]
     workspace_dir: str | None = None
     message: str | None = None
 
@@ -313,7 +322,7 @@ class PipelineFailure(_ResultBase):
     failed_stage: PipelineStage
     error: str
     timing: TimingInfo
-    stage_timings: list[StageTiming] = Field(default_factory=list)
+    stage_timings: list[StageTiming]
     cleaned_up: bool
     staging_dir: str | None = None
     workspace_dir: str | None = None

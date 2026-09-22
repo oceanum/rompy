@@ -120,6 +120,9 @@ def test_persistence_diagnostic_preserves_primary_error():
         backend_used="local",
         error="model failed",
         timing=timing(),
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
         persistence_diagnostic=PersistenceDiagnostic(
             sidecar_kind="run_result",
             sidecar_path="/tmp/run_result.json",

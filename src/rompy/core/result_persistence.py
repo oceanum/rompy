@@ -11,8 +11,15 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from rompy.core.responses import (
+    GenerateFailure,
     GenerateResultSidecar,
+    GenerateSuccess,
+    ModelRunFailure,
+    ModelRunSuccess,
+    PersistenceDiagnostic,
+    PostprocessFailure,
     PostprocessResultSidecar,
+    PostprocessSuccess,
     RunResultSidecar,
 )
 
@@ -55,7 +62,9 @@ def _serialized(model: BaseModel) -> bytes:
     # model_dump(mode="json") preserves numeric duration fields and emits RFC
     # 3339 timestamps. sort_keys gives deterministic repeated writes.
     value = model.model_dump(mode="json")
-    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode(
+    return (json.dumps(
+        value, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False
+    ) + "\n").encode(
         "utf-8"
     )
 
@@ -113,6 +122,101 @@ def _load(
         return model.model_validate(raw)
     except Exception as exc:
         raise ValueError(f"Invalid canonical {kind} sidecar {path}: {exc}") from exc
+
+
+def _failure_with_diagnostic(result: Any, diagnostic: PersistenceDiagnostic, primary_error: str | None) -> Any:
+    """Return the corresponding typed failure after persistence fails."""
+    operation_error = primary_error or getattr(result, "error", None)
+    if isinstance(result, GenerateSuccess):
+        return GenerateFailure(
+            run_id=result.run_id,
+            error=operation_error or diagnostic.error,
+            generated_files=result.generated_files,
+            timing=result.timing,
+            staging_dir=result.staging_dir,
+            config_file=result.config_file,
+            metadata=result.metadata,
+            persistence_diagnostic=diagnostic,
+        )
+    if isinstance(result, ModelRunSuccess):
+        return ModelRunFailure(
+            run_id=result.run_id,
+            backend_used=result.backend_used,
+            error=operation_error or diagnostic.error,
+            timing=result.timing,
+            output_dir=result.output_dir,
+            workspace_dir=result.workspace_dir,
+            artifacts=result.artifacts,
+            expected_outputs=result.expected_outputs,
+            missing_outputs=result.missing_outputs,
+            message=result.message,
+            metadata=result.metadata,
+            persistence_diagnostic=diagnostic,
+        )
+    if isinstance(result, PostprocessSuccess):
+        return PostprocessFailure(
+            run_id=result.run_id,
+            error=operation_error or diagnostic.error,
+            timing=result.timing,
+            output_dir=result.output_dir,
+            artifacts=result.artifacts,
+            expected_outputs=result.expected_outputs,
+            missing_outputs=result.missing_outputs,
+            message=result.message,
+            metadata=result.metadata,
+            persistence_diagnostic=diagnostic,
+        )
+    if isinstance(result, (GenerateFailure, ModelRunFailure, PostprocessFailure)):
+        return result.model_copy(
+            update={
+                "persistence_diagnostic": diagnostic,
+            }
+        )
+    raise TypeError(
+        "persist_result supports Generate, ModelRun, and Postprocess result variants"
+    )
+
+
+def persist_result(
+    result: Any,
+    sidecar: GenerateResultSidecar | RunResultSidecar | PostprocessResultSidecar,
+    staging_dir: Path,
+    *,
+    primary_error: str | None = None,
+) -> Any:
+    """Persist a result and turn any persistence error into typed failure evidence.
+
+    This adapter is intentionally a core seam: operation producers can adopt it
+    without duplicating error handling. Existing producer call sites remain a
+    downstream integration concern. Serialization, temporary-file, file-sync,
+    replace, and directory-sync failures are all reported in the returned
+    ``PersistenceDiagnostic``; no exception from persistence masks a supplied
+    primary operation error.
+    """
+    writers = {
+        GenerateResultSidecar: write_generate_result,
+        RunResultSidecar: write_run_result,
+        PostprocessResultSidecar: write_postprocess_result,
+    }
+    writer = writers.get(type(sidecar))
+    if writer is None:
+        raise TypeError(f"unsupported canonical sidecar type: {type(sidecar).__name__}")
+    sidecar_path = Path(staging_dir) / {
+        GenerateResultSidecar: GENERATE_RESULT_FILENAME,
+        RunResultSidecar: RUN_RESULT_FILENAME,
+        PostprocessResultSidecar: POSTPROCESS_RESULT_FILENAME,
+    }[type(sidecar)]
+    try:
+        writer(staging_dir, sidecar)
+    except Exception as exc:  # noqa: BLE001 - persistence must be observable
+        diagnostic = PersistenceDiagnostic(
+            sidecar_kind=sidecar.kind,
+            sidecar_path=str(sidecar_path),
+            error=str(exc),
+            primary_error=primary_error or getattr(result, "error", None),
+        )
+        return _failure_with_diagnostic(result, diagnostic, primary_error)
+    return result
 
 
 def load_generate_result(path_or_dir: Path) -> GenerateResultSidecar:

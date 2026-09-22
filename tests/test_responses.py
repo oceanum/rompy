@@ -103,7 +103,10 @@ class TestTimingInfo:
         assert value.duration_seconds == 2.25
         assert value.model_dump(mode="json")["duration_seconds"] == 2.25
 
-    def test_rejects_naive_non_utc_reversed_and_mismatched_timing(self):
+    def test_rejects_nonfinite_and_naive_non_utc_reversed_and_mismatched_timing(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValidationError, match="finite"):
+                TimingInfo(start_time=START, end_time=START, duration_seconds=value)
         with pytest.raises(ValidationError, match="UTC"):
             TimingInfo(start_time=datetime.fromisoformat("2026-01-01"), end_time=START)
         with pytest.raises(ValidationError, match="UTC"):
@@ -142,6 +145,31 @@ class TestTypedResults:
         assert restored.artifacts[1].uri == "s3://bucket/run-1/summary.json"
         assert restored.missing_outputs[0].reason == "not produced"
 
+    def test_required_evidence_fields_must_be_present_on_load(self):
+        raw = run_success().model_dump(mode="json")
+        for field in ("artifacts", "expected_outputs", "missing_outputs"):
+            missing = dict(raw)
+            missing.pop(field)
+            with pytest.raises(ValidationError, match=field):
+                TypeAdapter(ModelRunResult).validate_python(missing)
+
+        pipeline = PipelineSuccess(
+            run_id="run-1",
+            stages_completed=list(PipelineStage),
+            backend="local",
+            processor="processor",
+            staging_dir="staging/run-1",
+            output_dir="results/run-1",
+            postprocess_results=post_success(),
+            timing=timing(5),
+            stage_timings=[
+                StageTiming(stage=stage, timing=timing(1)) for stage in PipelineStage
+            ],
+        ).model_dump(mode="json")
+        pipeline.pop("stage_timings")
+        with pytest.raises(ValidationError, match="stage_timings"):
+            TypeAdapter(PipelineResult).validate_python(pipeline)
+
     def test_generate_union_requires_variant_fields(self):
         success = GenerateSuccess(
             run_id="run-1",
@@ -159,6 +187,14 @@ class TestTypedResults:
         assert isinstance(TypeAdapter(GenerateResult).validate_python(failure.model_dump()), GenerateFailure)
         with pytest.raises(ValidationError):
             TypeAdapter(GenerateResult).validate_python({"success": True, "run_id": "run-1"})
+        with pytest.raises(ValidationError):
+            GenerateSuccess(
+                run_id="run-1",
+                staging_dir="staging/run-1",
+                generated_files=[],
+                timing=timing(),
+                generated_at=START,
+            )
 
     def test_persistence_diagnostic_round_trip_preserves_primary_error(self):
         result = ModelRunFailure(
@@ -166,6 +202,9 @@ class TestTypedResults:
             backend_used="local",
             error="model failed",
             timing=timing(),
+            artifacts=[],
+            expected_outputs=[],
+            missing_outputs=[],
             persistence_diagnostic=PersistenceDiagnostic(
                 sidecar_kind="run_result",
                 sidecar_path="staging/run-1/run_result.json",
@@ -183,6 +222,9 @@ class TestTypedResults:
                 backend_used="local",
                 output_dir="results/run-1",
                 timing=timing(),
+                artifacts=[],
+                expected_outputs=[],
+                missing_outputs=[],
                 metadata={"bad": object()},
             )
 
@@ -223,11 +265,17 @@ class TestPipelineResult:
             "failed_stage": failed_stage,
             "error": "stage failed",
             "timing": timing(),
+            "stage_timings": [],
             "cleaned_up": False,
         }
         if failed_stage is PipelineStage.POSTPROCESS:
             kwargs["postprocess_results"] = PostprocessFailure(
-                run_id="run-1", error="postprocess failed", timing=timing()
+                run_id="run-1",
+                error="postprocess failed",
+                timing=timing(),
+                artifacts=[],
+                expected_outputs=[],
+                missing_outputs=[],
             )
         result = PipelineFailure(**kwargs)
         assert failed_stage not in result.stages_completed
@@ -242,6 +290,7 @@ class TestPipelineResult:
                 failed_stage=PipelineStage.RUN,
                 error="failed",
                 timing=timing(),
+                stage_timings=[],
                 cleaned_up=False,
             )
 
