@@ -1,8 +1,10 @@
 # Return-schema contract migration
 
-This guide describes the approved typed return contract for issue #3. Runtime
-implementation is follow-up work in #4 and #5; it is not a claim that every
-current release path already enforces these rules.
+This guide describes the merged typed return contract implemented by core at
+`608dbc4241cc66f8973550a6bb1e568b87bdcb2c` (schema version 2). The executable
+fixture corpus and adversarial validation are in
+`tests/fixtures/return_schema_v2/` and
+`tests/core/test_return_schema_fixtures.py`.
 
 ## Approved execution API
 
@@ -98,11 +100,17 @@ kind/version errors; no migration reader is provided now.
 - Persistence failure is an observable typed failure with sidecar kind/path,
   write error, and any primary operation error retained.
 
-## Follow-up ownership
+## Frozen validation corpus
 
-- **#4:** schema coherence, strict versioning, adapters, UTC/numeric-seconds
-  round trips, and canonical sidecar persistence.
-- **#5:** processor construction/handoff parity, pipeline semantics, CLI parity,
-  and fresh-process behavior.
-- **#6:** executable success/failure/malformed/legacy fixture validation, fresh
-  process replay, adversarial coverage, and frozen hashes after #4/#5.
+The manifest contains eight deterministic v2 envelopes covering generate, run,
+postprocess, and pipeline success/failure, plus four rejection fixtures. It
+records SHA-256 hashes and the canonical kind/status for each fixture. Core loaders reject malformed JSON,
+legacy or unsupported versions, wrong kinds, envelope/payload contradictions,
+unsafe artifact identities, invalid timing, non-finite numbers, and incoherent
+pipeline evidence. Legacy sidecars have no migration reader and must be
+regenerated as v2.
+
+The compatible core boundary is `ModelRun.run() -> ModelRunResult`, followed by
+`processor.process(ModelRunResult) -> PostprocessResult`; direct, pipeline, CLI,
+and fresh-process paths use that typed boundary. Downstream plugins must adapt
+to these types but are not changed by this validation.

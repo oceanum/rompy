@@ -53,12 +53,12 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 
 ## #6 — canonical fixtures and adversarial validation (follow-up)
 
-- [ ] Create frozen executable success/failure/malformed/legacy fixtures and
+- [x] Create frozen executable success/failure/malformed/legacy fixtures and
   publish hashes.
-- [ ] Validate fresh-process replay and all documented JSON examples after #4/#5
+- [x] Validate fresh-process replay and all documented JSON examples after #4/#5
   implement the contract.
-- [ ] Add adversarial artifact, URI, traversal, version, and contradiction cases.
-- [ ] Publish frozen hashes for the executable fixture corpus.
+- [x] Add adversarial artifact, URI, traversal, version, and contradiction cases.
+- [x] Publish frozen hashes for the executable fixture corpus.
 
 ## Explicit non-goals for this change
 
