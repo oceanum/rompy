@@ -154,7 +154,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 **Impact:** Consumers following the documentation call nonexistent APIs or depend on obsolete return types.
 
-**Smallest safe resolution:** Reconcile OpenSpec, migration material, docstrings, and public deserialization examples with the already-fixed `run() -> ModelRunResult` contract and an explicit union adapter.
+**Smallest safe resolution:** Reconcile OpenSpec, migration material, docstrings, and public deserialization examples with the current implementation's `run() -> ModelRunResult` behavior; explicitly approve or revise that public contract in #3, and document an explicit union adapter.
 
 **Test shape:** Add API characterization tests for `run()`, absence/presence of `run_detailed()`, union adapter deserialization, and all documented examples; run documentation snippets against the public package.
 
