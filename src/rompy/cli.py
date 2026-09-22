@@ -31,6 +31,22 @@ logger = get_logger(__name__)
 installed = importlib.metadata.entry_points(group="rompy.config").names
 
 
+def _result_envelope(result, kind, *, staging_dir=None, normalized_context=None):
+    """Serialize the current in-memory typed result as a canonical envelope."""
+    success = bool(result.success)
+    return {
+        "kind": kind,
+        "schema_version": 2,
+        "run_id": result.run_id,
+        "status": "success" if success else "failed",
+        "success": success,
+        "error": None if success else result.error,
+        "staging_dir": str(staging_dir) if staging_dir is not None else None,
+        "normalized_context": normalized_context.model_dump(mode="json") if normalized_context is not None else None,
+        "payload": result.model_dump(mode="json"),
+    }
+
+
 def _build_postprocess_model_run_from_sidecar(run_result_sidecar):
     """Build a minimal ModelRun for sidecar-driven postprocessing."""
     staging_dir = Path(run_result_sidecar.staging_dir)
@@ -462,20 +478,9 @@ def run(
                 f"❌ Model execution failed after {elapsed.total_seconds():.2f}s"
             )
 
-            # Emit JSON if requested
+            # Emit the current typed result, never a stale sidecar.
             if json_output:
-                sidecar_path = model_run.staging_dir / "run_result.json"
-                if sidecar_path.exists():
-                    print(sidecar_path.read_text())
-                else:
-                    print(
-                        json.dumps(
-                            {
-                                "success": False,
-                                "error": "Run failed but sidecar not found",
-                            }
-                        )
-                    )
+                print(json.dumps(_result_envelope(result, "run_result", staging_dir=result.workspace_dir)))
 
             sys.exit(1)
 
@@ -494,9 +499,13 @@ def run(
         if verbose > 0:
             logger.exception("Full traceback:")
 
-        # Emit error JSON if requested
+        # Emit error JSON if requested.
         if json_output:
-            print(json.dumps({"success": False, "error": str(e)}))
+            current = locals().get("result")
+            if current is not None and hasattr(current, "success"):
+                print(json.dumps(_result_envelope(current, "run_result", staging_dir=getattr(current, "workspace_dir", None))))
+            else:
+                print(json.dumps({"success": False, "error": str(e)}))
 
         sys.exit(1)
 
@@ -771,6 +780,8 @@ def generate(
         logger.info(f"✅ Inputs generated in {elapsed.total_seconds():.2f}s")
         logger.info(f"📁 Staging directory: {staging_dir}")
         if not generate_result.success:
+            if json_output:
+                print(json.dumps(_result_envelope(generate_result, "generate_result", staging_dir=staging_dir)))
             raise click.ClickException(generate_result.error)
 
         # List generated files
@@ -791,9 +802,13 @@ def generate(
         if verbose > 0:
             logger.exception("Full traceback:")
 
-        # Emit error JSON if requested
+        # Emit error JSON if requested, preferring the current typed result.
         if json_output:
-            print(json.dumps({"success": False, "error": str(e)}))
+            current = locals().get("generate_result")
+            if current is not None and hasattr(current, "success"):
+                print(json.dumps(_result_envelope(current, "generate_result", staging_dir=getattr(current, "staging_dir", None))))
+            else:
+                print(json.dumps({"success": False, "error": str(e)}))
 
         sys.exit(1)
 
@@ -1074,13 +1089,11 @@ def postprocess(
             logger.error(f"❌ Postprocessing failed: {error_msg}")
 
             if json_output:
-                postprocess_sidecar_path = (
-                    model_run_for_postprocess.staging_dir / POSTPROCESS_RESULT_FILENAME
-                )
-                if postprocess_sidecar_path.exists():
-                    print(postprocess_sidecar_path.read_text())
-                else:
-                    print(json.dumps({"success": False, "error": error_msg}))
+                print(json.dumps(_result_envelope(
+                    failure_result, "postprocess_result",
+                    staging_dir=model_run_for_postprocess.staging_dir,
+                    normalized_context=run_result.normalized_context,
+                )))
 
             sys.exit(1)
 

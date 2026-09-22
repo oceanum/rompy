@@ -32,6 +32,7 @@ from rompy.core.responses import (
     NormalizedContext,
     PipelineResult,
     PostprocessFailure,
+    PostprocessSuccess,
     PostprocessResult,
     PostprocessResultSidecar,
     TimingInfo,
@@ -589,6 +590,9 @@ class ModelRun(RompyBaseModel):
             success = backend_instance.run(
                 self, config=backend, workspace_dir=workspace_dir
             )
+            generation_failure = getattr(backend_instance, "generate_result", None)
+            if isinstance(generation_failure, GenerateFailure):
+                success = False
 
             # Determine output/workspace directories
             output_dir_path: Optional[Path] = None
@@ -605,10 +609,7 @@ class ModelRun(RompyBaseModel):
             expected_outputs = []
             missing_outputs = []
             if output_dir_str:
-                try:
-                    discovered = self.config.validate_outputs(output_dir_str) if success else []
-                except Exception:
-                    discovered = []
+                discovered = self.config.validate_outputs(output_dir_str) if success else []
                 root = Path(output_dir_str).resolve()
                 for artifact in discovered:
                     if getattr(artifact, "kind", "local") == "remote":
@@ -618,18 +619,12 @@ class ModelRun(RompyBaseModel):
                     if candidate.is_absolute():
                         try:
                             candidate = candidate.resolve().relative_to(root)
-                        except ValueError:
-                            continue
+                        except ValueError as exc:
+                            raise ValueError(f"observed artifact is outside output root: {artifact.path}") from exc
                     else:
                         candidate = Path(str(candidate))
-                    try:
-                        artifacts.append(artifact.model_copy(update={"path": candidate.as_posix()}))
-                    except Exception:
-                        continue
-                try:
-                    declared = self.config.expected_artifacts()
-                except Exception:
-                    declared = []
+                    artifacts.append(artifact.model_copy(update={"path": candidate.as_posix()}))
+                declared = self.config.expected_artifacts()
                 for artifact in declared:
                     if getattr(artifact, "kind", "local") == "remote":
                         expected = artifact
@@ -638,13 +633,17 @@ class ModelRun(RompyBaseModel):
                         if candidate.is_absolute():
                             try:
                                 candidate = candidate.resolve().relative_to(root)
-                            except ValueError:
-                                continue
+                            except ValueError as exc:
+                                raise ValueError(f"expected artifact is outside output root: {artifact.path}") from exc
                         expected = artifact.model_copy(update={"path": candidate.as_posix()})
                     expected_outputs.append(expected)
-                observed_ids = [item.model_dump(mode="json") for item in artifacts]
-                missing_outputs = [item for item in expected_outputs if item.model_dump(mode="json") not in observed_ids]
+                def _identity(item):
+                    return (item.kind, item.path) if item.kind == "local" else (item.kind, item.uri)
 
+                observed_ids = {_identity(item) for item in artifacts}
+                missing_outputs = [item for item in expected_outputs if _identity(item) not in observed_ids]
+
+            run_context = self._compute_run_normalized_context(workspace_dir) if workspace_dir else None
             result = _make_model_run_result(
                 success=success,
                 run_id=self.run_id,
@@ -654,11 +653,11 @@ class ModelRun(RompyBaseModel):
                 artifacts=artifacts,
                 expected_outputs=expected_outputs,
                 missing_outputs=missing_outputs,
-                error=None,
+                error=(generation_failure.error if isinstance(generation_failure, GenerateFailure) else None),
                 message=(
                     "Model execution completed successfully"
                     if success
-                    else "Model execution failed"
+                    else (generation_failure.error if isinstance(generation_failure, GenerateFailure) else "Model execution failed")
                 ),
                 timing=TimingInfo(
                     start_time=start_time,
@@ -666,6 +665,8 @@ class ModelRun(RompyBaseModel):
                 ),
                 metadata={
                     "backend_config": backend.model_dump(mode="json", exclude_none=True),
+                    **({"generate_result": generation_failure.model_dump(mode="json")} if isinstance(generation_failure, GenerateFailure) else {}),
+                    **({"normalized_context": run_context.model_dump(mode="json")} if run_context is not None else {}),
                 },
             )
 
@@ -673,7 +674,7 @@ class ModelRun(RompyBaseModel):
             if workspace_dir:
                 from rompy.core.result_persistence import persist_result
 
-                normalized_ctx = self._compute_run_normalized_context(workspace_dir)
+                normalized_ctx = run_context or self._compute_run_normalized_context(workspace_dir)
 
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
@@ -795,11 +796,15 @@ class ModelRun(RompyBaseModel):
                 )
             if processor_input is None:
                 raise TypeError("processor_input must be a validated ModelRunResult")
+            if not isinstance(processor_input, (ModelRunSuccess, ModelRunFailure)):
+                raise TypeError("processor_input must be a concrete ModelRunSuccess or ModelRunFailure")
             run_result = TypeAdapter(ModelRunResult).validate_python(processor_input)
             processor_instance = processor.build_processor()
             # Options are explicit process options, never flattened constructor state.
             process_options = dict(kwargs)
             result = processor_instance.process(run_result, **process_options)
+            if not isinstance(result, (PostprocessSuccess, PostprocessFailure)):
+                raise TypeError("processor output must be a concrete PostprocessSuccess or PostprocessFailure")
             result = TypeAdapter(PostprocessResult).validate_python(result)
             sidecar = PostprocessResultSidecar(
                 created_at=datetime.now(timezone.utc),
@@ -822,7 +827,11 @@ class ModelRun(RompyBaseModel):
                 artifacts=[], expected_outputs=[], missing_outputs=[],
                 timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
             )
-            if "validation error" in str(e).lower() and processor_input is not None:
+            if (
+                "validation error" in str(e).lower()
+                or "concrete ModelRun" in str(e)
+                or "concrete Postprocess" in str(e)
+            ) and processor_input is not None:
                 return result
             try:
                 sidecar = PostprocessResultSidecar(

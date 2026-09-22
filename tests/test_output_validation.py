@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -9,10 +9,13 @@ from rompy.core.responses import (
     ArtifactType,
     PostprocessFailure,
     PostprocessSuccess,
+    ModelRunSuccess,
+    TimingInfo,
 )
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 from rompy.postprocess import NoopPostprocessor
+from rompy.postprocess.config import NoopPostprocessorConfig
 from tests.test_helpers import DemoConfig
 
 
@@ -86,8 +89,10 @@ def test_noop_postprocessor_discovers_files_without_config(tmp_path):
     (check_dir / "output1.txt").write_text("test content 1")
     (check_dir / "output2.nc").write_text("test content 2")
 
-    processor = NoopPostprocessor()
-    result = processor.process(model_run, validate_outputs=True)
+    processor = NoopPostprocessor(NoopPostprocessorConfig())
+    now = datetime.now(timezone.utc)
+    run_result = ModelRunSuccess(run_id=model_run.run_id, backend_used="local", output_dir=str(check_dir), timing=TimingInfo(start_time=now, end_time=now), artifacts=[], expected_outputs=[], missing_outputs=[])
+    result = processor.process(run_result, validate_outputs=True)
 
     assert isinstance(result, PostprocessSuccess)
     assert result.success is True
@@ -99,7 +104,7 @@ def test_noop_postprocessor_discovers_files_without_config(tmp_path):
     assert all(a.size_bytes is not None for a in result.artifacts)
 
 
-def test_noop_postprocessor_with_duck_typed_model_run(tmp_path):
+def test_noop_postprocessor_rejects_duck_typed_model_run(tmp_path):
     class MinimalModelRun:
         run_id = "test-run"
         output_dir = str(tmp_path)
@@ -111,17 +116,11 @@ def test_noop_postprocessor_with_duck_typed_model_run(tmp_path):
     (check_dir / "output1.txt").write_text("test content 1")
     (check_dir / "output2.nc").write_text("test content 2")
 
-    processor = NoopPostprocessor()
+    processor = NoopPostprocessor(NoopPostprocessorConfig())
     result = processor.process(minimal_model, validate_outputs=True)
 
-    assert isinstance(result, PostprocessSuccess)
-    assert result.success is True
-    assert result.run_id == "test-run"
-    assert result.validated is True
-    assert isinstance(result.artifacts, list)
-    assert len(result.artifacts) == 2
-    assert all(isinstance(artifact, Artifact) for artifact in result.artifacts)
-    assert result.file_count == 2
+    assert isinstance(result, PostprocessFailure)
+    assert "ModelRunResult" in result.error
 
 
 def test_noop_postprocessor_with_missing_output_directory(tmp_path):
@@ -131,9 +130,9 @@ def test_noop_postprocessor_with_missing_output_directory(tmp_path):
 
     minimal_model = MinimalModelRun()
 
-    processor = NoopPostprocessor()
+    processor = NoopPostprocessor(NoopPostprocessorConfig())
     result = processor.process(minimal_model, validate_outputs=True)
 
     assert isinstance(result, PostprocessFailure)
     assert result.success is False
-    assert "not found" in result.error
+    assert "ModelRunResult" in result.error

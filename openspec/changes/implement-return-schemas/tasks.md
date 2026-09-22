@@ -49,7 +49,7 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 - [x] Validate processor returns as `PostprocessSuccess | PostprocessFailure`.
 - [x] Enforce strict successful stage prefixes, nested failure evidence, actual
   generated paths, and truthful cleanup outcomes.
-- [ ] Add equivalent-path and stage/cleanup tests.
+- [x] Add equivalent-path and stage/cleanup tests.
 
 ## #6 — canonical fixtures and adversarial validation (follow-up)
 

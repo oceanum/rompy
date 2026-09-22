@@ -1,6 +1,7 @@
 """Focused issue #5 runtime handoff tests."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -8,7 +9,8 @@ import pytest
 from pydantic import TypeAdapter
 
 from rompy.backends.config import LocalConfig
-from rompy.cli import _build_postprocess_processor_input
+from rompy.cli import _build_postprocess_processor_input, _result_envelope
+from rompy.core.result_persistence import load_run_result
 from rompy.core.responses import (
     GenerateFailure,
     GenerateSuccess,
@@ -19,6 +21,7 @@ from rompy.core.responses import (
     PipelineStage,
     PostprocessFailure,
     PostprocessSuccess,
+    PersistenceDiagnostic,
     TimingInfo,
 )
 from rompy.model import ModelRun
@@ -104,6 +107,15 @@ def test_processor_rejects_arbitrary_return_before_persistence(tmp_path):
     assert not (model.staging_dir / "postprocess_result.json").exists()
 
 
+def test_output_validation_errors_are_not_converted_to_empty_success(tmp_path):
+    model = ModelRun(run_id="run-5", output_dir=tmp_path)
+    # Patch the class method to exercise producer validation propagation.
+    with patch.object(model.config.__class__, "validate_outputs", side_effect=RuntimeError("validation failed")):
+        result = model.run(LocalConfig(command="true", timeout=60), workspace_dir=str(tmp_path))
+    assert isinstance(result, ModelRunFailure)
+    assert "validation failed" in result.error
+
+
 def test_generate_failure_preserves_path_timing_and_primary_error(tmp_path):
     model = ModelRun(run_id="run-5", output_dir=tmp_path)
     with patch.object(model.config.__class__, "render", side_effect=RuntimeError("render failed")):
@@ -173,8 +185,36 @@ def test_pipeline_postprocess_failure_retains_nested_evidence_and_prefix(tmp_pat
     assert result.failed_stage is PipelineStage.POSTPROCESS
     assert result.stages_completed == [PipelineStage.GENERATE, PipelineStage.RUN]
     assert result.postprocess_results is post
-    assert [stage.stage for stage in result.stage_timings] == [PipelineStage.GENERATE, PipelineStage.RUN]
+    assert [stage.stage for stage in result.stage_timings] == [PipelineStage.GENERATE, PipelineStage.RUN, PipelineStage.POSTPROCESS]
     assert result.error == "postprocess failed"
+
+
+def test_run_result_context_survives_real_write_load_round_trip(tmp_path):
+    model = ModelRun(run_id="run-5", output_dir=tmp_path)
+    with patch.object(model.config.__class__, "render", return_value=None):
+        generated = model.generate()
+    result = model.run(LocalConfig(command="true", timeout=60), workspace_dir=generated.staging_dir)
+    loaded = load_run_result(Path(generated.staging_dir)).payload
+    assert result.metadata["normalized_context"] == loaded.metadata["normalized_context"]
+    assert loaded.artifacts == result.artifacts
+    assert loaded.expected_outputs == result.expected_outputs
+    assert loaded.missing_outputs == result.missing_outputs
+
+
+def test_cli_current_failure_envelope_preserves_persistence_and_primary_error(tmp_path):
+    result = ModelRunFailure(
+        run_id="run-5", backend_used="local", error="primary failed", timing=timing(),
+        artifacts=[], expected_outputs=[], missing_outputs=[], output_dir=str(tmp_path),
+        persistence_diagnostic=PersistenceDiagnostic(
+            sidecar_kind="run_result", sidecar_path=str(tmp_path / "run_result.json"),
+            error="permission denied", primary_error="primary failed",
+        ),
+    )
+    envelope = _result_envelope(result, "run_result", staging_dir=tmp_path)
+    assert envelope["success"] is False
+    assert envelope["error"] == "primary failed"
+    assert envelope["payload"]["persistence_diagnostic"]["error"] == "permission denied"
+    assert envelope["payload"]["persistence_diagnostic"]["primary_error"] == "primary failed"
 
 
 def test_cli_sidecar_input_preserves_typed_evidence(tmp_path):

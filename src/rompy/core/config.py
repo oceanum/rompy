@@ -1,13 +1,16 @@
 import logging
 import warnings
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from pydantic import Field
 
 from .types import RompyBaseModel
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from rompy.core.responses import Artifact
 
 
 DEFAULT_TEMPLATE = str(Path(__file__).parent.parent / "templates" / "base")
@@ -148,7 +151,7 @@ class BaseConfig(RompyBaseModel):
                 artifact_type = _EXT_MAP.get(suffix, ArtifactType.OTHER)
                 artifacts.append(
                     Artifact(
-                        path=str(file_path),
+                        path=file_path.relative_to(output_dir).as_posix(),
                         artifact_type=artifact_type,
                         size_bytes=file_path.stat().st_size,
                     )
