@@ -13,7 +13,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 ## Current strengths
 
 - `PostprocessResult` and `PipelineResult` use true `success`-discriminated unions (`src/rompy/core/responses.py:232-269,398-401`).
-- `ModelRun.run()` returns `ModelRunResult`, matching the execution plan's fixed rule (`src/rompy/model.py:533-746`).
+- The current implementation's `ModelRun.run()` returns `ModelRunResult` (`src/rompy/model.py:533-746`); this is evidence of the implementation state, not owner approval of the public contract.
 - Runtime producers generally create UTC-aware timestamps.
 - Sidecar filenames and loaders are centralized (`src/rompy/core/result_persistence.py:51-53,199-319`).
 - Persistence uses a same-directory temporary file and `os.replace`, providing atomic reader visibility for successful writes (`src/rompy/core/result_persistence.py:64-88`).
@@ -142,7 +142,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 **Test shape:** Inject serialization, write, replace, file-sync, and directory-sync failures; assert the selected policy is observable, primary operation errors are retained with persistence diagnostics, and temporary files/previous valid bytes satisfy the promised atomicity level.
 
-**Owner:** #4.
+**Owner:** #3 for the persistence-failure contract decision; #4 for implementation and failure-injection testing.
 
 ### 8. P2 — OpenSpec and migration documentation describe conflicting APIs
 
@@ -164,7 +164,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 | Area | Current contradiction | Required disposition |
 |---|---|---|
-| Run API | OpenSpec says boolean `run()` plus `run_detailed()`; implementation and execution plan require typed `run()` | No new decision: update documents to `run() -> ModelRunResult`. |
+| Run API | OpenSpec says boolean `run()` plus `run_detailed()`; current implementation returns typed `run() -> ModelRunResult` and the execution plan describes that direction | Reconcile and explicitly approve or revise the public contract in #3; update documents only after that decision. |
 | Generate API | Direct Python returns a path/raises while a typed result exists only in a sidecar | Owner decision 3: approve typed migration or explicitly retain path/raise compatibility. |
 | Versions | Generate/run accept v1/v2 as one shape; CLI imposes a separate context rule; postprocess is v1-only | Owner decision 1. |
 | Interval encoding | Producers emit `3600s`; three tests expect `1:00:00`; no controlling spec fixes either | Freeze one representation under owner decision 1. |
@@ -198,15 +198,21 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 ## Prioritized TDD slices and ownership
 
-1. **#3 — Contract characterization and decisions:** Freeze D1/D2, generate/run API, processor protocol, duration encoding, and version behavior. Add tests for approved deserialization APIs.
-2. **#4 — Schema coherence, timing, round trips, and persistence:** Add mutation matrices, model/JSON and writer/loader round trips, UTC/order/duration/version/metadata tests, and persistence failure injection.
+1. **#3 — Contract characterization and decisions:** Freeze D1/D2, reconcile and explicitly approve or revise the generate/run API (including the current typed `run()` implementation), processor protocol, duration encoding, version behavior, and persistence-failure policy. Add tests for approved deserialization APIs.
+2. **#4 — Schema coherence, timing, round trips, and persistence implementation:** Add mutation matrices, model/JSON and writer/loader round trips, UTC/order/duration/version/metadata tests, and implementation/failure-injection tests for the #3-approved persistence policy.
 3. **#5 — Typed processor equivalence and pipeline semantics:** Test exact processor input across direct Python, pipeline, CLI, and fresh process; reject malformed outputs; test strict stage prefixes, nested failures, cleanup, and `run_id_subdir=False`.
 4. **#6 — CLI parity, fixtures, and adversarial freeze:** Establish one JSON/exit policy, repair obsolete invocations, publish stable success/failure fixtures and hashes, and test malformed/unsupported-version and fresh-subprocess replay behavior.
 
 ## Baseline command and failure classification
 
 **Supplied baseline log:** `/tmp/rompy-wave0.log` (review evidence; not a repository artifact).
-**Result:** **111 passed, 7 failed, 6 warnings.** The baseline was supplied by the audit run; this documentation lane does not claim an independent rerun.
+**Exact invocation run by the parent Wave 0 baseline (not rerun in this lane):**
+
+```text
+uv run --no-sync --directory rompy pytest -q tests/test_responses.py tests/test_result_persistence.py tests/test_generate_result_sidecar.py tests/test_run_sidecar_integration.py tests/test_postprocess_sidecar_integration.py tests/test_output_validation.py tests/test_cli_json_output.py tests/test_cli_postprocess_consume.py tests/test_cli_t7_idempotency.py
+```
+
+**Result:** **111 passed, 7 failed, 6 warnings.** This is the parent Wave 0 baseline result; this documentation lane does not claim an independent rerun.
 
 | Failures | Classification | Disposition |
 |---|---|---|
@@ -223,7 +229,7 @@ Warnings are not causes of the seven failures. The unknown integration mark and 
 2. **Artifact identity (D2):** Use staging-relative local paths, a separate remote URI/external-location variant, observed-only `artifacts`, and structured expected/missing evidence.
 3. **Failure policy:** Decide the direct-generate compatibility transition and make persistence failure observable—prefer a typed persistence diagnostic/failure rather than silent operational success. Define whether crash durability requires file and directory fsync.
 
-Processor input and `run()` return type do not require further owner decisions; the execution plan already fixes both as `ModelRunResult`.
+Processor input remains an execution-plan recommendation for #5. The current typed `run()` return is implementation evidence, but its public contract still requires explicit reconciliation and approval in #3 because the OpenSpec documents a conflicting boolean `run()`/`run_detailed()` API.
 
 ## Acceptance checklist
 
