@@ -1,43 +1,49 @@
+# Proposal: Canonical typed return schemas
+
 ## Why
 
-Rompy currently returns untyped dictionaries from key operations (`pipeline()`, `postprocess()`, `run()`), creating inconsistency with its otherwise Pydantic-based architecture. This leads to stringly-typed code, lack of IDE support, and runtime errors from unexpected dictionary structures. Moving to strongly-typed Pydantic response schemas will improve type safety, developer experience, and API consistency.
+Rompy's generation, execution, pipeline, and postprocessing boundaries need one
+reviewable result contract.  The contract must survive direct Python calls,
+pipeline execution, CLI handoff, and a fresh process without silently changing
+meaning or dropping evidence.
 
-## What Changes
+## Scope of this change
 
-- **BREAKING**: Replace `Dict[str, Any]` returns with Pydantic response models for `postprocess()` and `pipeline()` methods
-- Add new `ModelRun.run_detailed()` method that returns structured `ModelRunResult` (non-breaking)
-- Create discriminated unions for success/failure states (`PipelineResult`, `PostprocessResult`)
-- Add rich metadata including timing information, file counts, and backend-specific details
-- Update CLI to consume typed result objects instead of dictionary `.get()` calls
-- Update all postprocessor plugins to return structured results
-- Provide `.model_dump()` for backward compatibility with dict-based consumers
+This OpenSpec change freezes the public, versioned contract for:
 
-## Capabilities
+- typed success/failure results for generation, execution, pipeline, and
+  postprocessing;
+- coherent sidecar envelopes and strict version/kind handling;
+- UTC timing and numeric-seconds interval/duration wire values;
+- typed local/remote artifact identity and distinct expected/missing evidence;
+- the processor construction and handoff protocol; and
+- observable canonical-sidecar persistence failures.
 
-### New Capabilities
-- `result-schemas`: Pydantic models for pipeline, postprocess, and run operation results with discriminated unions for success/failure states
-- `timing-metadata`: Execution timing capture with start/end times and computed duration
-- `result-serialization`: JSON/dict serialization of result objects for external consumers
+This is design and contract work.  It does not change runtime source, plugins,
+tests, dependencies, generated files, or release/package metadata.  The
+implementation follow-ups are #4 (schema, persistence, and invariant
+implementation), #5 (processor/pipeline/CLI handoffs), and #6 (canonical
+fixtures and adversarial validation).
 
-### Modified Capabilities
-<!-- No existing capabilities are being modified at the requirements level -->
+## Authoritative decisions
 
-## Impact
+1. Legacy or ambiguous core-v1 and flat WW3-v1 sidecars are rejected with an
+   actionable kind/version error.  No migration reader is introduced now.
+2. Duration and interval wire values are numeric seconds.  Human-readable
+   formatting is presentation only.
+3. Artifact identity is typed: local artifacts are normalized
+   staging-relative paths, remote artifacts are an explicit URI variant,
+   `artifacts` contains observed outputs, and expected/missing outputs are
+   separate structured evidence.
+4. Generation moves toward typed results.  Canonical sidecar persistence is
+   required; persistence failure is an observable typed failure and retains any
+   primary operation error.
 
-**Code Impact**:
-- `src/rompy/model.py`: Change return types for `postprocess()` and `pipeline()`, add `run_detailed()`
-- `src/rompy/pipeline/__init__.py`: Return `PipelineResult` instead of dict
-- `src/rompy/postprocess/__init__.py`: Return `PostprocessResult` instead of dict  
-- `src/rompy/cli.py`: Update result handling to use object properties instead of `.get()`
-- `tests/**/*.py`: Update assertions from dict access to object properties (~32 test files)
+## Non-goals
 
-**API Impact**:
-- **BREAKING**: External code calling `pipeline()` or `postprocess()` must adapt to Pydantic models
-- **BREAKING**: Postprocessor plugins must return `PostprocessResult` instead of dict
-- Mitigation: `.model_dump()` provides dict for gradual migration
-
-**Dependencies**:
-- Requires Pydantic v2 (already in use via `RompyBaseModel`)
-- No new external dependencies
-
-**Version**: This is a major version change (v2.0.0)
+- Implementing #4, #5, or #6.
+- A migration reader for legacy sidecars.
+- A new shared package or plugin implementation.
+- The frozen executable fixture corpus assigned to #6.
+- Changing the current runtime source or adding a parallel scalar-return mode
+  (the canonical execution API is explicitly typed below).
