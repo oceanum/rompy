@@ -217,7 +217,7 @@ snippets against the public package.
 1. **#3 — Contract characterization and decisions:** **Complete in this change.** The surrounding OpenSpec documents freeze the generate/run API, processor protocol boundary, duration encoding, version behavior, artifact identity, and persistence-failure policy.
 2. **#4 — Schema coherence, timing, round trips, and persistence implementation:** Add mutation matrices, model/JSON and writer/loader round trips, UTC/order/duration/version/metadata tests, and implementation/failure-injection tests for the #3-approved persistence policy.
 3. **#5 — Typed processor equivalence and pipeline semantics:** Test exact processor input across direct Python, pipeline, CLI, and fresh process; reject malformed outputs; test strict stage prefixes, nested failures, cleanup, and `run_id_subdir=False`.
-4. **#6 — CLI parity, fixtures, and adversarial freeze:** Establish one JSON/exit policy, repair obsolete invocations, publish stable success/failure fixtures and hashes, and test malformed/unsupported-version and fresh-subprocess replay behavior.
+4. **#6 — Fixture and adversarial freeze:** Freeze stable success/failure/malformed/legacy fixtures and hashes, and test malformed/unsupported-version and fresh-subprocess replay behavior after #4/#5 implement the contract. CLI JSON/exit policy and obsolete-invocation repair belong to #5.
 
 ## Baseline command and failure classification
 
@@ -233,7 +233,7 @@ uv run --no-sync --directory rompy pytest -q tests/test_responses.py tests/test_
 | Failures | Classification | Disposition |
 |---|---|---|
 | Three normalized-context interval assertions | Contract drift: tests expect timedelta text while producers deliberately emit seconds strings | Decide canonical duration encoding, then update assertions; not an environment failure. |
-| Four CLI postprocess JSON tests | Stale tests use model-configuration YAML where current CLI requires a staging directory or `run_result.json` | Repair invocation and retain JSON/exit assertions. |
+| Four CLI postprocess JSON tests | Stale tests use model-configuration YAML where current CLI requires a staging directory or `run_result.json` | #5 repairs invocation and retains JSON/exit assertions under one CLI policy. |
 | Setup/environment failures | None evidenced | No action. |
 | Unrelated failures | None evidenced | No action. |
 
@@ -270,7 +270,7 @@ all execution paths.
 ## Residual risks
 
 - This audit is documentation-only; conclusions rely on the supplied baseline log and evidence synthesis rather than a new test run.
-- Compatibility cannot be finalized without evidence identifying which legacy formats were actually released or persisted.
+- Strict rejection of legacy/ambiguous sidecars is approved; #4/#5 must implement and verify actionable kind/version rejection.
 - Fixture hashes and fresh-process validation belong to #6 and do not yet exist.
 - The historical Gate BLOCK was cleared for contract definition by issue #3;
   runtime schema/plugin implementation remains out of scope here and belongs to

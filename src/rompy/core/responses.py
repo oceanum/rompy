@@ -412,24 +412,22 @@ Examples:
 class ModelRunResult(RompyBaseModel):
     """Result from model execution via a backend.
 
-    Returned by `ModelRun.run()` as the typed execution result (without
-    postprocessing). The `success` discriminator selects the success or failure
-    variant; consumers do not infer state from optional fields.
+    Current concrete result returned by `ModelRun.run()` (without
+    postprocessing).  This model records the operation outcome and execution
+    context; `success` is a plain boolean and `error` is optional on this
+    current implementation.
 
     Attributes:
-        success: Literal discriminator for the result variant
+        success: Whether execution succeeded
         run_id: Run identifier (from ModelRun)
         backend_used: Backend class name
-        output_dir: Output directory path when known
-        workspace_dir: Workspace directory (backend-specific, optional)
-        timing: Required UTC execution timing
-        artifacts: Observed output artifacts
-        expected_outputs: Structured expected-output evidence
-        missing_outputs: Structured missing-output evidence
-        error: Required on the failure variant
+        output_dir: Output directory path
+        workspace_dir: Workspace directory (optional)
+        timing: Execution timing information
+        artifacts: Observed output artifacts discovered after execution
+        error: Error message when available
         message: Additional context (optional)
-        metadata: Backend-specific JSON-safe metadata (optional)
-        persistence_diagnostic: Typed persistence failure evidence when needed
+        metadata: Backend-specific metadata (optional)
 
     Examples:
         ::
@@ -442,9 +440,10 @@ class ModelRunResult(RompyBaseModel):
             else:
                 print(f"Run failed: {result.error}")
 
-    For raw union deserialization, use an explicit Pydantic ``TypeAdapter``
-    for ``ModelRunResult`` or a concrete sidecar loader; the union alias is not
-    itself a model class.
+    The approved future result contract, including discriminated variants,
+    expected/missing output evidence, and persistence diagnostics, is documented
+    in the issue #3 OpenSpec change for follow-up implementation in #4.  This
+    docstring describes only fields present on this concrete class today.
     """
 
     success: bool = Field(..., description="Whether execution succeeded")
