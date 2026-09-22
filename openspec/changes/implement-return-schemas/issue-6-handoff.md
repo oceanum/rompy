@@ -1,10 +1,14 @@
 # Issue #6 downstream handoff
 
-## Compatible core baseline
+## Runtime baseline and reviewed snapshot
 
-Downstream integration should target core commit
+The runtime contract baseline is core commit
 `608dbc4241cc66f8973550a6bb1e568b87bdcb2c` (the merged #5 head on
-`return_schema`). The contract is schema version **2** with these operation
+`return_schema`). This PR's reviewed fixture snapshot is its exact review head,
+`0ef13c22edd9595f0f590be8bf5c577dbcb68056`, before this focused review fix.
+After squash merge, downstream WW3/Ops consumers MUST pin/use the final
+`return_schema` merge SHA published in issue #6 closure, not this prerequisite
+or an ephemeral branch head. The contract is schema version **2** with these operation
 kinds: `generate_result`, `run_result`, `postprocess_result`, and the validated
 pipeline result kind `pipeline_result` used by the fixture envelope.
 
@@ -25,13 +29,13 @@ of truth for SHA-256 verification:
 | `run_success.json` | run_result/success | `9e64d49a896a9fa521daa2cb5d0067517b3b65da5eb380d04c5d72e584d1ce9f` |
 | `run_failure.json` | run_result/failed | `d1da8ea12df2c3a40ae00c2f41fc1f345a0d4b2292f12dbeb75c2652eb267643` |
 | `postprocess_success.json` | postprocess_result/success | `0039a185e9a3284fa8d700f6ef9c9f984700681cf83e5473349226b014a32e01` |
-| `postprocess_failure.json` | postprocess_result/failed | `348ca4b7a73544d54d7b914d74da2485d4a6305875d30aae085540af1f863256` |
+| `postprocess_failure.json` | postprocess_result/failed | `42b846ed2581808d3dfd1e2cd391273f6f5fd81263d6c7914df255cbedf88a17` |
 | `pipeline_success.json` | pipeline_result/success | `a8b509cf680db2e6286bfb9000836ce7577cc9b88ca4ec553cae57af8ad70c55` |
 | `pipeline_failure.json` | pipeline_result/failed | `afc33b6282000364aff23107cc8b3083a714e4d16ec93fba1e5f5c178f9e2541` |
 | `adversarial/malformed.json` | malformed/reject | `6f5e7359678e8924994c6dbfb317d70fb6443042df93c6d531bef3aa73974ba9` |
 | `adversarial/legacy_v1.json` | run_result v1/reject | `3c43fa6af22b2244292f3366a2c31fc4b2997e049bd98493b215187f1500abd6` |
 | `adversarial/unsupported_v99.json` | run_result v99/reject | `b3975b59c2922984132d9a7e8febb142abb6ef7b36640e1c8db382cbd18d8265` |
-| `adversarial/wrong_kind.json` | wrong_result/reject | `fb2d6f22f86148321d9a72b1abd38cc1866e6e7447714e4c37cfe033433635bc` |
+| `adversarial/wrong_kind.json` | wrong_result/reject | `d13d994a831fe9c7b156a08bfa30c4e1bbd8db28aa7628490fc33396db830875` |
 
 All fixture timestamps, numeric intervals, paths, artifacts, expected/missing
 evidence, normalized context, nested stage timing, and persistence diagnostics

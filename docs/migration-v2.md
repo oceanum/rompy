@@ -43,7 +43,14 @@ else:
     print(pipeline_result.failed_stage.value, pipeline_result.error)
     # failed_stage is excluded from stages_completed
 
-postprocess_result = model_run.postprocess(processor=processor_config)
+run_result = model_run.run(
+    backend=backend_config,
+    workspace_dir=workspace_dir,
+)
+postprocess_result = model_run.postprocess(
+    processor=processor_config,
+    processor_input=run_result,
+)
 if postprocess_result.success:
     for artifact in postprocess_result.artifacts:
         print(artifact)

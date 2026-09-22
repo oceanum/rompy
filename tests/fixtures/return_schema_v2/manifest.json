@@ -69,6 +69,7 @@
       "expected": "reject",
       "kind": "run_result",
       "path": "adversarial/legacy_v1.json",
+      "reason": "schema_version",
       "schema_version": 1,
       "sha256": "3c43fa6af22b2244292f3366a2c31fc4b2997e049bd98493b215187f1500abd6"
     },
@@ -76,6 +77,7 @@
       "expected": "reject",
       "kind": "malformed",
       "path": "adversarial/malformed.json",
+      "reason": "malformed_json",
       "schema_version": null,
       "sha256": "6f5e7359678e8924994c6dbfb317d70fb6443042df93c6d531bef3aa73974ba9"
     },
@@ -83,6 +85,7 @@
       "expected": "reject",
       "kind": "run_result",
       "path": "adversarial/unsupported_v99.json",
+      "reason": "schema_version",
       "schema_version": 99,
       "sha256": "b3975b59c2922984132d9a7e8febb142abb6ef7b36640e1c8db382cbd18d8265"
     },
@@ -90,8 +93,9 @@
       "expected": "reject",
       "kind": "wrong_result",
       "path": "adversarial/wrong_kind.json",
+      "reason": "kind",
       "schema_version": 2,
-      "sha256": "fb2d6f22f86148321d9a72b1abd38cc1866e6e7447714e4c37cfe033433635bc"
+      "sha256": "d13d994a831fe9c7b156a08bfa30c4e1bbd8db28aa7628490fc33396db830875"
     }
   ],
   "kind": "fixture_manifest",

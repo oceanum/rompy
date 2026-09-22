@@ -20,13 +20,17 @@ from rompy.core.responses import (
     GenerateResultSidecar,
     NormalizedContext,
     PipelineResult,
+    PostprocessResult,
     PostprocessResultSidecar,
+    PostprocessSuccess,
     RunResultSidecar,
+    ModelRunResult,
     TimingInfo,
 )
 
 FIXTURE_DIR = Path(__file__).parents[1] / "fixtures" / "return_schema_v2"
 MANIFEST = FIXTURE_DIR / "manifest.json"
+HANDOFF = Path("openspec/changes/implement-return-schemas/issue-6-handoff.md")
 SIDECARE_TYPES = {
     "generate_result": (GenerateResultSidecar, result_persistence.load_generate_result),
     "run_result": (RunResultSidecar, result_persistence.load_run_result),
@@ -46,11 +50,53 @@ def _assert_envelope(raw: dict) -> None:
     assert raw["error"] == (None if raw["success"] else raw["payload"]["error"])
 
 
+def _normative_design_examples() -> list[dict]:
+    source = Path("openspec/changes/implement-return-schemas/design.md")
+    blocks = [
+        json.loads(match.group(1))
+        for match in re.finditer(r"```json\n(.*?)\n```", source.read_text(encoding="utf-8"), re.DOTALL)
+    ]
+    assert len(blocks) == 3, "approved design must retain exactly three bounded JSON examples"
+    return blocks
+
+
 def test_documented_json_examples_are_valid():
     for path in (Path("openspec/changes/implement-return-schemas/design.md"), Path("SCHEMA_DESIGN.md")):
         text = path.read_text(encoding="utf-8")
         for match in re.finditer(r"```json\n(.*?)\n```", text, re.DOTALL):
             json.loads(match.group(1))
+
+
+def test_normative_examples_contract_validate_and_round_trip(tmp_path):
+    success, failure, malformed = _normative_design_examples()
+    success_model = RunResultSidecar.model_validate(success)
+    assert RunResultSidecar.model_validate(success_model.model_dump(mode="json")).model_dump(mode="json") == success_model.model_dump(mode="json")
+    failure_model = PostprocessResultSidecar.model_validate(failure)
+    assert PostprocessResultSidecar.model_validate(failure_model.model_dump(mode="json")).model_dump(mode="json") == failure_model.model_dump(mode="json")
+    malformed_path = tmp_path / "normative-malformed.json"
+    malformed_path.write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValueError, match="envelope/payload run_id mismatch"):
+        result_persistence.load_run_result(malformed_path)
+    success_mismatch = deepcopy(malformed)
+    success_mismatch["payload"]["run_id"] = success_mismatch["run_id"]
+    with pytest.raises(ValidationError, match="envelope/payload success mismatch"):
+        RunResultSidecar.model_validate(success_mismatch)
+
+
+def test_handoff_hashes_match_manifest_and_fixture_bytes():
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    expected = {entry["path"]: entry["sha256"] for entry in manifest["fixtures"]}
+    published = {
+        match.group("path"): match.group("sha")
+        for match in re.finditer(
+            r"^\| `(?P<path>[^`]+)` \| [^|]+ \| `(?P<sha>[0-9a-f]{64})` \|$",
+            HANDOFF.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    }
+    assert published == expected
+    for path, digest in published.items():
+        assert hashlib.sha256((FIXTURE_DIR / path).read_bytes()).hexdigest() == digest
 
 
 def test_manifest_hashes_and_metadata_are_frozen():
@@ -67,6 +113,18 @@ def test_manifest_hashes_and_metadata_are_frozen():
         assert path.is_file()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"]
         if entry.get("expected") == "reject":
+            assert entry["reason"] in {"malformed_json", "schema_version", "kind"}
+            if entry["reason"] == "malformed_json":
+                assert entry["schema_version"] is None
+                assert entry["kind"] == "malformed"
+                continue
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            assert raw["schema_version"] == entry["schema_version"]
+            assert raw["kind"] == entry["kind"]
+            if entry["reason"] == "schema_version":
+                assert raw["schema_version"] != 2
+            else:
+                assert raw["schema_version"] == 2
             continue
         raw = json.loads(path.read_text(encoding="utf-8"))
         assert {raw[key] for key in ("kind", "schema_version", "status", "success")} == {
@@ -85,8 +143,10 @@ def test_operation_fixtures_round_trip_through_public_loader(name):
     model_type, loader = SIDECARE_TYPES[raw["kind"]]
     loaded = loader(FIXTURE_DIR / name)
     assert isinstance(loaded, model_type)
-    assert model_type.model_validate(loaded.model_dump(mode="json")) == loaded
-    assert loaded.model_dump(mode="json")["payload"]["run_id"] == raw["payload"]["run_id"]
+    canonical_source = model_type.model_validate(raw).model_dump(mode="json")
+    canonical_loaded = loaded.model_dump(mode="json")
+    assert canonical_loaded == canonical_source
+    assert canonical_loaded["payload"]["run_id"] == raw["payload"]["run_id"]
 
 
 @pytest.mark.parametrize("name", ["pipeline_success.json", "pipeline_failure.json"])
@@ -94,7 +154,9 @@ def test_pipeline_fixtures_round_trip_through_pipeline_adapter(name):
     raw = _raw(name)
     _assert_envelope(raw)
     payload = TypeAdapter(PipelineResult).validate_python(raw["payload"])
-    assert TypeAdapter(PipelineResult).validate_python(payload.model_dump(mode="json")) == payload
+    canonical_source = TypeAdapter(PipelineResult).validate_python(raw["payload"]).model_dump(mode="json")
+    canonical_loaded = TypeAdapter(PipelineResult).validate_python(payload.model_dump(mode="json")).model_dump(mode="json")
+    assert canonical_loaded == canonical_source
     assert payload.run_id == raw["run_id"]
 
 
@@ -136,14 +198,8 @@ sidecar = load_run_result(Path(sys.argv[1]))
 model = ModelRun(run_id=sidecar.payload.run_id, output_dir=Path(sys.argv[2]))
 result = model.postprocess(RecordingConfig(), processor_input=sidecar.payload)
 print(json.dumps({
-    "received_type": sidecar.payload.__class__.__name__,
-    "result_type": result.__class__.__name__,
-    "success": result.success,
-    "run_id": result.run_id,
-    "artifact_count": len(result.artifacts),
-    "expected_count": len(result.expected_outputs),
-    "missing_count": len(result.missing_outputs),
-    "context": result.metadata["normalized_context"]["config_hash"],
+    "received": sidecar.payload.model_dump(mode="json"),
+    "returned": result.model_dump(mode="json"),
 }))
 '''
     env = os.environ.copy()
@@ -156,25 +212,32 @@ print(json.dumps({
         env=env,
     )
     observed = json.loads(completed.stdout)
-    assert observed == {
-        "received_type": "ModelRunSuccess" if "success" in name else "ModelRunFailure",
-        "result_type": "PostprocessSuccess",
-        "success": True,
-        "run_id": "run-001",
-        "artifact_count": 2 if "success" in name else 1,
-        "expected_count": 2,
-        "missing_count": 1,
-        "context": "sha256:fixture-config",
-    }
+    source = _raw(name)
+    expected_received = TypeAdapter(ModelRunResult).validate_python(source["payload"]).model_dump(mode="json")
+    received = observed["received"]
+    assert received == expected_received
+    expected_returned = PostprocessSuccess(
+        run_id=received["run_id"],
+        output_dir=received.get("output_dir") or "fixtures/output",
+        validated=True,
+        timing=received["timing"],
+        artifacts=received["artifacts"],
+        expected_outputs=received["expected_outputs"],
+        missing_outputs=received["missing_outputs"],
+        metadata=received["metadata"],
+    ).model_dump(mode="json")
+    assert TypeAdapter(PostprocessResult).validate_python(observed["returned"]).model_dump(mode="json") == expected_returned
 
 
 def test_malformed_json_and_legacy_or_wrong_envelopes_rejected(tmp_path):
-    malformed = FIXTURE_DIR / "adversarial" / "malformed.json"
-    with pytest.raises(ValueError, match="Invalid JSON"):
-        result_persistence.load_run_result(malformed)
-    for name, expected in (("legacy_v1.json", "schema_version"), ("unsupported_v99.json", "schema_version"), ("wrong_kind.json", "kind")):
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    for entry in manifest["fixtures"]:
+        if entry.get("expected") != "reject":
+            continue
+        path = FIXTURE_DIR / entry["path"]
+        expected = "Invalid JSON" if entry["reason"] == "malformed_json" else entry["reason"]
         with pytest.raises(ValueError, match=expected):
-            result_persistence.load_run_result(FIXTURE_DIR / "adversarial" / name)
+            result_persistence.load_run_result(path)
     source = _raw("run_success.json")
     for key, value, message in (
         ("schema_version", 1, "schema_version"),
