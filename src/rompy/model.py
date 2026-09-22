@@ -36,8 +36,6 @@ from rompy.core.responses import (
     PostprocessResultSidecar,
     TimingInfo,
     RunResultSidecar,
-    ArtifactIdentity,
-    LocalArtifact,
 )
 from rompy.core.time import TimeRange
 from rompy.core.types import RompyBaseModel
@@ -503,11 +501,6 @@ class ModelRun(RompyBaseModel):
 
         # Fallback: compute from model fields if not found or no workspace
         if normalized_ctx is None:
-            model_type = (
-                self.config.model_type
-                if hasattr(self.config, "model_type")
-                else type(self.config).__name__.lower()
-            )
             normalized_ctx = self._normalized_context(
                 Path(workspace_dir) if workspace_dir else Path(self.output_dir)
             )
@@ -649,7 +642,7 @@ class ModelRun(RompyBaseModel):
                                 continue
                         expected = artifact.model_copy(update={"path": candidate.as_posix()})
                     expected_outputs.append(expected)
-                observed_ids = {item.model_dump(mode="json") for item in artifacts}
+                observed_ids = [item.model_dump(mode="json") for item in artifacts]
                 missing_outputs = [item for item in expected_outputs if item.model_dump(mode="json") not in observed_ids]
 
             result = _make_model_run_result(
@@ -672,7 +665,7 @@ class ModelRun(RompyBaseModel):
                     end_time=datetime.now(timezone.utc),
                 ),
                 metadata={
-                    "backend_config": backend.model_dump(exclude_none=True),
+                    "backend_config": backend.model_dump(mode="json", exclude_none=True),
                 },
             )
 
@@ -825,10 +818,12 @@ class ModelRun(RompyBaseModel):
                 run_id=self.run_id,
                 output_dir=str(self.staging_dir),
                 message=f"Postprocessing failed: {e}",
-                error=str(e),
+                error=f"Processor protocol failure: {e}",
                 artifacts=[], expected_outputs=[], missing_outputs=[],
                 timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
             )
+            if "validation error" in str(e).lower() and processor_input is not None:
+                return result
             try:
                 sidecar = PostprocessResultSidecar(
                     created_at=datetime.now(timezone.utc), run_id=self.run_id,

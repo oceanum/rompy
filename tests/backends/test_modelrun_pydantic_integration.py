@@ -12,10 +12,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rompy.backends import DockerConfig, LocalConfig
-from rompy.core.responses import Artifact, ModelRunResult
+from rompy.core.responses import Artifact, ModelRunFailure, ModelRunSuccess
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 from tests.test_helpers import DemoConfig
+
+ModelRunResult = (ModelRunSuccess, ModelRunFailure)
 
 
 @pytest.fixture
@@ -402,7 +404,7 @@ class TestModelRunPydanticIntegration:
             command="echo test",
             working_dir=output_dir,
         )
-        discovered = [Artifact(path=str(output_dir / "result.nc"))]
+        discovered = [Artifact(path="result.nc")]
 
         with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
             with patch.object(
@@ -411,12 +413,8 @@ class TestModelRunPydanticIntegration:
                 result = model_run.run(backend=config)
 
         assert result.success is True
-        # validate_outputs may return absolute paths; ModelRun.run normalizes
-        # artifact paths to be relative to the run output directory. Compare
-        # normalized paths to the result to avoid brittle absolute-path checks.
-        expected = [
-            Artifact(path=str(Path(a.path).relative_to(output_dir))) for a in discovered
-        ]
+        # Canonical artifact identities are already staging-relative.
+        expected = discovered
         assert result.artifacts == expected
         # validate_outputs should be called with the actual run output
         # directory (including the run_id subdirectory in this test).
@@ -434,8 +432,8 @@ class TestModelRunPydanticIntegration:
             working_dir=run_output_dir,
         )
         discovered = [
-            Artifact(path=str(run_output_dir / "result.nc")),
-            Artifact(path=str(run_output_dir / "nested" / "plot.png")),
+            Artifact(path="result.nc"),
+            Artifact(path="nested/plot.png"),
         ]
         model_run.output_dir = output_root
 
