@@ -5,7 +5,9 @@
 The runtime contract baseline is core commit
 `608dbc4241cc66f8973550a6bb1e568b87bdcb2c` (the merged #5 head on
 `return_schema`). This PR's reviewed fixture snapshot is its exact review head,
-`0ef13c22edd9595f0f590be8bf5c577dbcb68056`, before this focused review fix.
+`0deaf89d75382ea38bb0c5214ab81e51c1388072`, the focused fixture-review fix
+commit. The final PR head may advance with documentation synchronization; this
+commit identifies the exact reviewed fixture snapshot.
 After squash merge, downstream WW3/Ops consumers MUST pin/use the final
 `return_schema` merge SHA published in issue #6 closure, not this prerequisite
 or an ephemeral branch head. The contract is schema version **2** with these operation
@@ -51,10 +53,10 @@ ruff check tests/core/test_return_schema_fixtures.py
 python -m compileall -q tests/core/test_return_schema_fixtures.py
 ```
 
-Observed results at this baseline: the fixture plus canonical schema suite passed **23 tests**;
+Observed results at this baseline: the fixture plus canonical schema suite passed **25 tests**;
 the focused #5 suites passed **22 tests**; and the combined historical #4
 regression command passed **62 tests**. The full practical repository suite
-passed **495 tests**, with **18 explicit skips** and **50 warnings**; it
+passed **497 tests**, with **18 explicit skips** and **50 warnings**; it
 collected cleanly with no failures or errors. Warnings are the repository's
 existing unknown `integration` mark and generic output-validation warnings.
 The fixture suite verifies manifest hashes, model/JSON/sidecar round trips,
