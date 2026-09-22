@@ -75,8 +75,11 @@ def test_normative_examples_contract_validate_and_round_trip(tmp_path):
     assert PostprocessResultSidecar.model_validate(failure_model.model_dump(mode="json")).model_dump(mode="json") == failure_model.model_dump(mode="json")
     malformed_path = tmp_path / "normative-malformed.json"
     malformed_path.write_text(json.dumps(malformed), encoding="utf-8")
-    with pytest.raises(ValueError, match="envelope/payload run_id mismatch"):
+    with pytest.raises(ValueError) as error:
         result_persistence.load_run_result(malformed_path)
+    message = str(error.value)
+    assert "envelope/payload run_id mismatch" in message
+    assert "envelope/payload success mismatch" in message
     success_mismatch = deepcopy(malformed)
     success_mismatch["payload"]["run_id"] = success_mismatch["run_id"]
     with pytest.raises(ValidationError, match="envelope/payload success mismatch"):
@@ -127,9 +130,8 @@ def test_manifest_hashes_and_metadata_are_frozen():
                 assert raw["schema_version"] == 2
             continue
         raw = json.loads(path.read_text(encoding="utf-8"))
-        assert {raw[key] for key in ("kind", "schema_version", "status", "success")} == {
-            entry[key] for key in ("kind", "schema_version", "status", "success")
-        }
+        for key in ("kind", "schema_version", "status", "success"):
+            assert raw[key] == entry[key], f"{path}: {key} metadata mismatch"
         _assert_envelope(raw)
 
 
@@ -230,6 +232,15 @@ print(json.dumps({
 
 
 def test_malformed_json_and_legacy_or_wrong_envelopes_rejected(tmp_path):
+    wrong_kind = _raw("adversarial/wrong_kind.json")
+    corrected_kind = deepcopy(wrong_kind)
+    corrected_kind["kind"] = "run_result"
+    for key, value in wrong_kind.items():
+        if key != "kind":
+            assert corrected_kind[key] == value
+    corrected = RunResultSidecar.model_validate(corrected_kind)
+    assert corrected.kind == "run_result"
+
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for entry in manifest["fixtures"]:
         if entry.get("expected") != "reject":

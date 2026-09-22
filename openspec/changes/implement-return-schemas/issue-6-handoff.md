@@ -70,3 +70,39 @@ actionably; no migration reader is provided. Core only freezes and validates
 this protocol. WW3/Ops downstream plugins still need their own typed adapters,
 artifact mapping, and operational persistence checks; no plugin changes are
 included in issue #6.
+
+## Fresh-fixer correction on PR #11
+
+The follow-up correction is intentionally minimal: the generic sidecar coherence
+validator now collects envelope/payload `run_id` and `success` mismatches before
+raising, so the normative malformed example reports both actionable mismatch
+messages in one rejection. Status/error coherence checks and all valid behavior
+remain unchanged. The fixture tests also compare manifest metadata key by key and
+change only `kind` in a copy of `adversarial/wrong_kind.json` to prove the
+otherwise unchanged schema-v2 sidecar validates as `run_result`; direct wrong-kind
+rejection remains covered. The historical issue #3 non-goals in `tasks.md` are
+explicitly scoped to that earlier contract-definition phase and do not contradict
+completed #5/#6 work.
+
+Fresh-fixer validation results:
+
+```text
+PYTHONPATH=src pytest -q tests/core/test_return_schema_fixtures.py tests/test_responses.py
+41 passed
+PYTHONPATH=src pytest -q tests/core/test_return_schema_fixtures.py tests/core/test_canonical_result_schema.py tests/test_responses.py tests/test_result_persistence.py tests/test_issue5_backends.py tests/test_issue5_handoffs.py
+87 passed, 15 warnings
+PYTHONPATH=src pytest -q
+497 passed, 18 skipped, 50 warnings
+PYTHONPATH=src ruff check src/rompy/core/responses.py tests/core/test_return_schema_fixtures.py
+All checks passed
+PYTHONPATH=src python3 -m py_compile src/rompy/core/responses.py tests/core/test_return_schema_fixtures.py
+passed
+openspec validate --strict --no-interactive implement-return-schemas
+Change 'implement-return-schemas' is valid
+fixture SHA-256 verification
+12 fixture hashes verified; no fixture bytes changed
+git diff --check
+passed
+```
+
+No fixture bytes or published hashes changed.
