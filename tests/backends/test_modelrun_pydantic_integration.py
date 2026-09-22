@@ -388,7 +388,7 @@ class TestModelRunPydanticIntegration:
             timeout=7200,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         # Verify metadata contains backend config

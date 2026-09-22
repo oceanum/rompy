@@ -594,16 +594,22 @@ class ModelRun(RompyBaseModel):
             if isinstance(generation_failure, GenerateFailure):
                 success = False
 
-            # Determine output/workspace directories
+            # Derive one authoritative workspace from the typed generation result.
+            effective_workspace = Path(workspace_dir) if workspace_dir else None
+            if effective_workspace is None and generation_failure is not None:
+                effective_workspace = Path(generation_failure.staging_dir) if generation_failure.staging_dir else None
+            if effective_workspace is None:
+                generated = getattr(backend_instance, "generate_result", None)
+                if isinstance(generated, GenerateSuccess):
+                    effective_workspace = Path(generated.staging_dir)
+
             output_dir_path: Optional[Path] = None
             if self.output_dir:
                 output_dir_path = Path(self.output_dir)
                 if self.run_id_subdir:
                     output_dir_path = output_dir_path / self.run_id
-            output_dir_str = (
-                str(output_dir_path) if output_dir_path else str(self.output_dir)
-            )
-            workspace_dir_str = str(workspace_dir) if workspace_dir else None
+            output_dir_str = str(output_dir_path) if output_dir_path else str(self.output_dir)
+            workspace_dir_str = str(effective_workspace) if effective_workspace else None
             backend_class_name = type(backend).__name__.replace("Config", "")
             artifacts = []
             expected_outputs = []
@@ -624,7 +630,7 @@ class ModelRun(RompyBaseModel):
                     else:
                         candidate = Path(str(candidate))
                     artifacts.append(artifact.model_copy(update={"path": candidate.as_posix()}))
-                declared = self.config.expected_artifacts()
+                declared = self.config.expected_artifacts() if success else []
                 for artifact in declared:
                     if getattr(artifact, "kind", "local") == "remote":
                         expected = artifact
@@ -643,7 +649,7 @@ class ModelRun(RompyBaseModel):
                 observed_ids = {_identity(item) for item in artifacts}
                 missing_outputs = [item for item in expected_outputs if _identity(item) not in observed_ids]
 
-            run_context = self._compute_run_normalized_context(workspace_dir) if workspace_dir else None
+            run_context = self._compute_run_normalized_context(str(effective_workspace)) if effective_workspace else None
             result = _make_model_run_result(
                 success=success,
                 run_id=self.run_id,
@@ -671,29 +677,32 @@ class ModelRun(RompyBaseModel):
             )
 
             # Write run_result.json sidecar
-            if workspace_dir:
+            if effective_workspace:
                 from rompy.core.result_persistence import persist_result
 
-                normalized_ctx = run_context or self._compute_run_normalized_context(workspace_dir)
+                normalized_ctx = run_context or self._compute_run_normalized_context(str(effective_workspace))
 
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     updated_at=None,
                     run_id=result.run_id,
-                    staging_dir=str(workspace_dir),
+                    staging_dir=str(effective_workspace),
                     status="success" if result.success else "failed",
                     success=result.success,
                     error=result.error if not result.success else None,
                     normalized_context=normalized_ctx,
                     payload=result,
                 )
-                result = persist_result(result, sidecar, Path(workspace_dir))
+                result = persist_result(result, sidecar, effective_workspace)
 
             return result
 
         except Exception as e:
-            # Wrap any exceptions in ModelRunResult
-            workspace_dir_str = str(workspace_dir) if workspace_dir else None
+            # Wrap any exceptions in ModelRunResult while retaining a generated path.
+            known_workspace = locals().get("effective_workspace")
+            if known_workspace is None and workspace_dir:
+                known_workspace = Path(workspace_dir)
+            workspace_dir_str = str(known_workspace) if known_workspace else None
 
             result = _make_model_run_result(
                 success=False,
@@ -714,23 +723,23 @@ class ModelRun(RompyBaseModel):
             )
 
             # Write run_result.json sidecar
-            if workspace_dir:
+            if known_workspace:
                 from rompy.core.result_persistence import persist_result
 
-                normalized_ctx = self._compute_run_normalized_context(workspace_dir)
+                normalized_ctx = self._compute_run_normalized_context(str(known_workspace))
 
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     updated_at=None,
                     run_id=result.run_id,
-                    staging_dir=str(workspace_dir),
+                    staging_dir=str(known_workspace),
                     status="failed",
                     success=False,
                     error=result.error,
                     normalized_context=normalized_ctx,
                     payload=result,
                 )
-                result = persist_result(result, sidecar, Path(workspace_dir), primary_error=result.error if not result.success else None)
+                result = persist_result(result, sidecar, known_workspace, primary_error=result.error if not result.success else None)
 
             return result
 

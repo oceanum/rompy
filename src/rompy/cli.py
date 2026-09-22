@@ -780,8 +780,6 @@ def generate(
         logger.info(f"✅ Inputs generated in {elapsed.total_seconds():.2f}s")
         logger.info(f"📁 Staging directory: {staging_dir}")
         if not generate_result.success:
-            if json_output:
-                print(json.dumps(_result_envelope(generate_result, "generate_result", staging_dir=staging_dir)))
             raise click.ClickException(generate_result.error)
 
         # List generated files
