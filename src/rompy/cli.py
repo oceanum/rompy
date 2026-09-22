@@ -12,7 +12,6 @@ import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Dict, Optional, cast
 
 import click
@@ -59,31 +58,8 @@ def _build_postprocess_model_run_from_sidecar(run_result_sidecar):
 
 
 def _build_postprocess_processor_input(run_result_sidecar):
-    payload = run_result_sidecar.payload
-    payload_fields = payload.__class__.model_fields.keys()
-    payload_data = {field: getattr(payload, field) for field in payload_fields}
-    staging_dir = Path(run_result_sidecar.staging_dir)
-    normalized_artifacts = []
-    for artifact in payload.artifacts:
-        artifact_path = Path(artifact.path)
-        try:
-            normalized_path = artifact_path.relative_to(staging_dir)
-        except ValueError:
-            normalized_path = artifact_path
-        resolved_path = normalized_path
-        if not resolved_path.is_absolute():
-            resolved_path = staging_dir / resolved_path
-        if not resolved_path.exists():
-            continue
-        normalized_artifacts.append(
-            artifact.model_copy(update={"path": str(normalized_path)})
-        )
-    payload_data["output_dir"] = str(staging_dir)
-    payload_data["artifacts"] = normalized_artifacts
-    return SimpleNamespace(
-        **payload_data,
-        normalized_context=run_result_sidecar.normalized_context,
-    )
+    """Return the canonical payload unchanged for fresh-process parity."""
+    return run_result_sidecar.payload
 
 
 def configure_logging(
@@ -464,8 +440,11 @@ def run(
                     )
                 logger.info(f"Using existing workspace: {staging_dir}")
             else:
-                staging_dir = model_run.generate()
+                generate_result = model_run.generate()
+                staging_dir = generate_result.staging_dir or str(model_run.staging_dir)
                 logger.info(f"Inputs generated in: {staging_dir}")
+                if not generate_result.success:
+                    raise click.ClickException(generate_result.error)
 
             if dry_run:
                 logger.info("Dry run mode - skipping model execution")
@@ -785,11 +764,14 @@ def generate(
         logger.info(f"Run ID: {model_run.run_id}")
 
         start_time = datetime.now()
-        staging_dir = model_run.generate()
+        generate_result = model_run.generate()
+        staging_dir = generate_result.staging_dir or str(model_run.staging_dir)
         elapsed = datetime.now() - start_time
 
         logger.info(f"✅ Inputs generated in {elapsed.total_seconds():.2f}s")
         logger.info(f"📁 Staging directory: {staging_dir}")
+        if not generate_result.success:
+            raise click.ClickException(generate_result.error)
 
         # List generated files
         if Path(staging_dir).exists():

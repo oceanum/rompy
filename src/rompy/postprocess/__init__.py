@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
+from pydantic import TypeAdapter
+
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
@@ -42,10 +44,13 @@ class NoopPostprocessor:
     It's useful as a base class or for testing.
     """
 
+    def __init__(self, config: NoopPostprocessorConfig):
+        self.config = config
+
     def process(
         self,
         model_run,
-        validate_outputs: bool = True,
+        validate_outputs: bool | None = None,
         output_dir: Optional[Union[str, Path]] = None,
         **kwargs,
     ) -> PostprocessResult:
@@ -73,6 +78,19 @@ class NoopPostprocessor:
                     print(f"Failed: {result.error}")
         """
         start_time = datetime.now(timezone.utc)
+        from rompy.core.responses import ModelRunResult
+        try:
+            model_run = TypeAdapter(ModelRunResult).validate_python(model_run)
+        except Exception as exc:
+            return PostprocessFailure(
+                run_id="unknown",
+                error=f"processor input must be a validated ModelRunResult: {exc}",
+                message="Invalid input parameters",
+                artifacts=[], expected_outputs=[], missing_outputs=[],
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
+            )
+        if validate_outputs is None:
+            validate_outputs = self.config.validate_outputs
 
         # Validate input parameters
         if not model_run:
@@ -102,7 +120,7 @@ class NoopPostprocessor:
             if output_dir:
                 check_dir = Path(output_dir)
             else:
-                check_dir = Path(model_run.output_dir) / model_run.run_id
+                check_dir = Path(model_run.output_dir)
 
             # Validate outputs if requested
             if validate_outputs:
@@ -113,6 +131,9 @@ class NoopPostprocessor:
                         error=f"Output directory not found: {check_dir}",
                         output_dir=str(check_dir),
                         message="Validation failed",
+                        artifacts=list(model_run.artifacts),
+                        expected_outputs=list(model_run.expected_outputs),
+                        missing_outputs=list(model_run.missing_outputs),
                         timing=TimingInfo(
                             start_time=start_time, end_time=datetime.now(timezone.utc)
                         ),
@@ -134,7 +155,7 @@ class NoopPostprocessor:
 
                 artifacts = [
                     Artifact(
-                        path=str(f),
+                        path=f.relative_to(check_dir).as_posix(),
                         artifact_type=ext_map.get(f.suffix.lower(), ArtifactType.OTHER),
                         size_bytes=f.stat().st_size,
                     )
@@ -154,6 +175,8 @@ class NoopPostprocessor:
                     validated=True,
                     file_count=file_count,
                     artifacts=artifacts,
+                    expected_outputs=list(model_run.expected_outputs),
+                    missing_outputs=list(model_run.missing_outputs),
                     message="No postprocessing requested - validation only",
                     timing=TimingInfo(
                         start_time=start_time, end_time=datetime.now(timezone.utc)
@@ -169,6 +192,9 @@ class NoopPostprocessor:
                     run_id=model_run.run_id,
                     output_dir=str(check_dir),
                     validated=False,
+                    artifacts=list(model_run.artifacts),
+                    expected_outputs=list(model_run.expected_outputs),
+                    missing_outputs=list(model_run.missing_outputs),
                     message="No postprocessing requested - validation skipped",
                     timing=TimingInfo(
                         start_time=start_time, end_time=datetime.now(timezone.utc)
@@ -181,6 +207,9 @@ class NoopPostprocessor:
                 run_id=getattr(model_run, "run_id", "unknown"),
                 error=str(e),
                 message="Exception during postprocessing",
+                artifacts=list(getattr(model_run, "artifacts", [])),
+                expected_outputs=list(getattr(model_run, "expected_outputs", [])),
+                missing_outputs=list(getattr(model_run, "missing_outputs", [])),
                 timing=TimingInfo(
                     start_time=start_time, end_time=datetime.now(timezone.utc)
                 ),

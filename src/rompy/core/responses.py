@@ -322,7 +322,7 @@ class PipelineFailure(_ResultBase):
     failed_stage: PipelineStage
     error: str
     timing: TimingInfo
-    stage_timings: list[StageTiming]
+    stage_timings: list[StageTiming] = Field(default_factory=list)
     cleaned_up: bool
     staging_dir: str | None = None
     workspace_dir: str | None = None

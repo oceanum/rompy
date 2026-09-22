@@ -16,6 +16,7 @@ from rompy.core.responses import (
     PipelineStage,
     PipelineSuccess,
     PostprocessFailure,
+    StageTiming,
     TimingInfo,
 )
 
@@ -133,7 +134,9 @@ class LocalPipelineBackend:
         process_kwargs = process_kwargs or {}
         start_time = datetime.now(timezone.utc)
         stages_completed: List[PipelineStage] = []
+        stage_timings: List[StageTiming] = []
         cleaned_up = False
+        staging_dir = None
 
         backend_type = backend_config.__class__.__name__.replace("Config", "").lower()
         processor_type = getattr(
@@ -151,7 +154,12 @@ class LocalPipelineBackend:
             logger.info(f"Stage 1: Generating input files for {model_run.run_id}")
 
             try:
-                staging_dir = model_run.generate()
+                generate_result = model_run.generate()
+                if not generate_result.success:
+                    stage_timings.append(StageTiming(stage=PipelineStage.GENERATE, timing=generate_result.timing))
+                    raise RuntimeError(generate_result.error)
+                staging_dir = Path(generate_result.staging_dir)
+                stage_timings.append(StageTiming(stage=PipelineStage.GENERATE, timing=generate_result.timing))
                 stages_completed.append(PipelineStage.GENERATE)
                 logger.info(f"Input files generated successfully in: {staging_dir}")
             except Exception as e:
@@ -173,7 +181,7 @@ class LocalPipelineBackend:
 
             # Validate generation stage
             if validate_stages:
-                output_dir = Path(model_run.output_dir) / model_run.run_id
+                output_dir = Path(staging_dir)
                 if not output_dir.exists():
                     logger.error(f"Output directory was not created: {output_dir}")
                     return PipelineFailure(
@@ -201,10 +209,10 @@ class LocalPipelineBackend:
                 )
 
                 if not run_result.success:
+                    stage_timings.append(StageTiming(stage=PipelineStage.RUN, timing=run_result.timing))
                     logger.error("Model run failed")
                     if cleanup_on_failure:
-                        self._cleanup_outputs(model_run)
-                        cleaned_up = True
+                        cleaned_up = self._cleanup_outputs(staging_dir)
                     return PipelineFailure(
                         success=False,
                         run_id=model_run.run_id,
@@ -212,22 +220,26 @@ class LocalPipelineBackend:
                         processor=processor_type,
                         stages_completed=stages_completed,
                         failed_stage=PipelineStage.RUN,
-                        error="Model run failed",
-                        message="Model run failed",
+                        staging_dir=str(staging_dir),
+                        output_dir=run_result.output_dir,
+                        error=run_result.error,
+                        message=run_result.message or "Model run failed",
+                        metadata={"stage_result": run_result.model_dump(mode="json")},
+                        stage_timings=stage_timings,
                         timing=TimingInfo(
                             start_time=start_time, end_time=datetime.now(timezone.utc)
                         ),
                         cleaned_up=cleaned_up,
                     )
 
+                stage_timings.append(StageTiming(stage=PipelineStage.RUN, timing=run_result.timing))
                 stages_completed.append(PipelineStage.RUN)
                 logger.info("Model run completed successfully")
 
             except Exception as e:
                 logger.exception(f"Error during model run: {e}")
                 if cleanup_on_failure:
-                    self._cleanup_outputs(model_run)
-                    cleaned_up = True
+                    cleaned_up = self._cleanup_outputs(staging_dir)
                 return PipelineFailure(
                     success=False,
                     run_id=model_run.run_id,
@@ -235,6 +247,7 @@ class LocalPipelineBackend:
                     processor=processor_type,
                     stages_completed=stages_completed,
                     failed_stage=PipelineStage.RUN,
+                    staging_dir=str(staging_dir),
                     message=f"Model run error: {str(e)}",
                     error=str(e),
                     timing=TimingInfo(
@@ -248,12 +261,13 @@ class LocalPipelineBackend:
 
             try:
                 postprocess_results = model_run.postprocess(
-                    processor=processor, **process_kwargs
+                    processor=processor, processor_input=run_result, **process_kwargs
                 )
-                stages_completed.append(PipelineStage.POSTPROCESS)
 
                 # Check if postprocessing was successful
                 if isinstance(postprocess_results, PostprocessFailure):
+                    if cleanup_on_failure:
+                        cleaned_up = self._cleanup_outputs(staging_dir)
                     logger.warning(
                         "Postprocessing failed but pipeline will mark as complete with failure"
                     )
@@ -265,15 +279,21 @@ class LocalPipelineBackend:
                         processor=processor_type,
                         stages_completed=stages_completed,
                         failed_stage=PipelineStage.POSTPROCESS,
+                        staging_dir=str(staging_dir),
+                        output_dir=postprocess_results.output_dir,
                         message=f"Postprocessing failed: {postprocess_results.message}",
                         error=postprocess_results.error,
                         postprocess_results=postprocess_results,
+                        metadata={"stage_result": postprocess_results.model_dump(mode="json")},
+                        stage_timings=stage_timings,
                         timing=TimingInfo(
                             start_time=start_time, end_time=datetime.now(timezone.utc)
                         ),
                         cleaned_up=cleaned_up,
                     )
 
+                stage_timings.append(StageTiming(stage=PipelineStage.POSTPROCESS, timing=postprocess_results.timing))
+                stages_completed.append(PipelineStage.POSTPROCESS)
                 logger.info("Postprocessing completed")
 
             except Exception as e:
@@ -285,8 +305,10 @@ class LocalPipelineBackend:
                     processor=processor_type,
                     stages_completed=stages_completed,
                     failed_stage=PipelineStage.POSTPROCESS,
+                    staging_dir=str(staging_dir),
                     message=f"Postprocessing error: {str(e)}",
                     error=str(e),
+                    stage_timings=stage_timings,
                     timing=TimingInfo(
                         start_time=start_time, end_time=datetime.now(timezone.utc)
                     ),
@@ -299,7 +321,7 @@ class LocalPipelineBackend:
             )
 
             # Compute output_dir for successful pipeline
-            output_dir_path = Path(model_run.output_dir) / model_run.run_id
+            output_dir_path = Path(run_result.output_dir)
 
             return PipelineSuccess(
                 success=True,
@@ -310,6 +332,7 @@ class LocalPipelineBackend:
                 staging_dir=str(staging_dir),
                 output_dir=str(output_dir_path),
                 postprocess_results=postprocess_results,
+                stage_timings=stage_timings,
                 message="Pipeline completed successfully",
                 timing=TimingInfo(
                     start_time=start_time, end_time=datetime.now(timezone.utc)
@@ -338,19 +361,18 @@ class LocalPipelineBackend:
                 cleaned_up=cleaned_up,
             )
 
-    def _cleanup_outputs(self, model_run) -> None:
-        """Clean up output files on pipeline failure.
-
-        Args:
-            model_run: The ModelRun instance
-        """
+    def _cleanup_outputs(self, output_dir) -> bool:
+        """Clean the actual generated path and report the confirmed outcome."""
+        if output_dir is None:
+            return False
         try:
-            output_dir = Path(model_run.output_dir) / model_run.run_id
-            if output_dir.exists():
-                logger.info(f"Cleaning up output directory: {output_dir}")
-                import shutil
-
-                shutil.rmtree(output_dir)
-                logger.info("Cleanup completed")
+            output_dir = Path(output_dir)
+            if not output_dir.exists():
+                return True
+            logger.info(f"Cleaning up output directory: {output_dir}")
+            import shutil
+            shutil.rmtree(output_dir)
+            return not output_dir.exists()
         except Exception as e:
             logger.warning(f"Failed to cleanup output directory: {e}")
+            return False
