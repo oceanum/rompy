@@ -127,6 +127,38 @@ def test_run_persistence_failure_does_not_emit_stale_success_sidecar(tmp_path):
     assert documents[0]["payload"]["persistence_diagnostic"]["error"] == "disk full"
 
 
+def test_run_generation_persistence_failure_emits_current_generate_failure_once(tmp_path):
+    config = tmp_path / "config.yml"
+    config.write_text("model_type: base\nrun_id: cli-run\n")
+    backend_file = tmp_path / "backend.yml"
+    backend_file.write_text('type: local\ncommand: "true"\n')
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    stale = {"kind": "generate_result", "schema_version": 2, "run_id": "old", "status": "success", "success": True}
+    (workspace / "generate_result.json").write_text(json.dumps(stale))
+    failed = GenerateFailure(
+        run_id="cli-run", staging_dir=str(workspace), generated_files=[], error="render primary",
+        timing=timing(), persistence_diagnostic=PersistenceDiagnostic(
+            sidecar_kind="generate_result", sidecar_path=str(workspace / "generate_result.json"),
+            error="disk full", primary_error="render primary",
+        ),
+    )
+    with patch("rompy.cli.ModelRun") as model_class:
+        instance = model_class.return_value
+        instance.generate.return_value = failed
+        response = CliRunner().invoke(
+            cli, ["run", str(config), "--backend-config", str(backend_file), "--json"]
+        )
+    documents = [json.loads(line) for line in response.output.splitlines() if line.startswith("{")]
+    assert response.exit_code == 1
+    assert len(documents) == 1
+    assert documents[0]["kind"] == "generate_result"
+    assert documents[0]["run_id"] == "cli-run"
+    assert documents[0]["error"] == "render primary"
+    assert documents[0]["payload"]["persistence_diagnostic"]["error"] == "disk full"
+    assert documents[0]["run_id"] != "old"
+
+
 def test_postprocess_json_success_is_canonical_and_exits_zero(tmp_path):
     write_run(tmp_path)
     result = CliRunner().invoke(cli, ["postprocess", str(tmp_path), "--processor-config", str(processor_config(tmp_path)), "--json"])

@@ -189,6 +189,27 @@ def test_pipeline_postprocess_failure_retains_nested_evidence_and_prefix(tmp_pat
     assert result.error == "postprocess failed"
 
 
+def test_backend_exception_after_implicit_generation_persists_failed_sidecar(tmp_path):
+    class RaisingBackend:
+        def run(self, model_run, config, workspace_dir=None):
+            self.generate_result = model_run.generate()
+            raise TimeoutError("backend timed out")
+
+    model = ModelRun(run_id="run-5", output_dir=tmp_path)
+    with patch.object(model.config.__class__, "render", return_value=None), \
+         patch.object(LocalConfig, "get_backend_class", return_value=RaisingBackend):
+        result = model.run(LocalConfig(command="true", timeout=60))
+
+    assert isinstance(result, ModelRunFailure)
+    assert result.error == "backend timed out"
+    assert result.workspace_dir == str(model.staging_dir)
+    persisted = load_run_result(model.staging_dir).payload
+    assert isinstance(persisted, ModelRunFailure)
+    assert persisted.error == "backend timed out"
+    assert persisted.workspace_dir == str(model.staging_dir)
+    assert persisted.metadata["normalized_context"]["staging_dir"] == str(model.staging_dir)
+
+
 def test_run_result_context_survives_real_write_load_round_trip(tmp_path):
     model = ModelRun(run_id="run-5", output_dir=tmp_path)
     with patch.object(model.config.__class__, "render", return_value=None):
@@ -215,6 +236,58 @@ def test_cli_current_failure_envelope_preserves_persistence_and_primary_error(tm
     assert envelope["error"] == "primary failed"
     assert envelope["payload"]["persistence_diagnostic"]["error"] == "permission denied"
     assert envelope["payload"]["persistence_diagnostic"]["primary_error"] == "primary failed"
+
+
+def test_pipeline_stage_exceptions_retain_typed_nested_failures(tmp_path):
+    generated = GenerateSuccess(run_id="run-5", staging_dir=str(tmp_path), generated_files=[], timing=timing())
+    model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
+    model.generate.side_effect = RuntimeError("generate primary")
+    result = LocalPipelineBackend().execute(
+        model, backend_config=LocalConfig(command="true"), processor=RecordingConfig()
+    )
+    assert result.failed_stage is PipelineStage.GENERATE
+    assert isinstance(result.generate_result, GenerateFailure)
+    assert result.generate_result.error == "generate primary"
+    assert result.stage_timings[-1].stage is PipelineStage.GENERATE
+
+    model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
+    model.generate.return_value = generated
+    model.run.side_effect = RuntimeError("run primary")
+    result = LocalPipelineBackend().execute(
+        model, backend_config=LocalConfig(command="true"), processor=RecordingConfig()
+    )
+    assert result.failed_stage is PipelineStage.RUN
+    assert result.stages_completed == [PipelineStage.GENERATE]
+    assert isinstance(result.run_result, ModelRunFailure)
+    assert result.run_result.error == "run primary"
+
+    model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
+    model.generate.return_value = generated
+    model.run.return_value = run_success(tmp_path)
+    model.postprocess.side_effect = RuntimeError("postprocess primary")
+    result = LocalPipelineBackend().execute(
+        model, backend_config=LocalConfig(command="true"), processor=RecordingConfig()
+    )
+    assert result.failed_stage is PipelineStage.POSTPROCESS
+    assert result.stages_completed == [PipelineStage.GENERATE, PipelineStage.RUN]
+    assert isinstance(result.postprocess_results, PostprocessFailure)
+    assert result.postprocess_results.error == "postprocess primary"
+
+
+def test_pipeline_cleanup_exception_is_structured_without_masking_stage_error(tmp_path):
+    generated = GenerateSuccess(run_id="run-5", staging_dir=str(tmp_path), generated_files=[], timing=timing())
+    model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
+    model.generate.return_value = generated
+    model.run.side_effect = RuntimeError("run primary")
+    backend = LocalPipelineBackend()
+    backend._cleanup_outputs = Mock(side_effect=OSError("cleanup secondary"))
+    result = backend.execute(
+        model, backend_config=LocalConfig(command="true"), processor=RecordingConfig(), cleanup_on_failure=True
+    )
+    assert result.error == "run primary"
+    assert result.cleaned_up is False
+    assert result.metadata["cleanup_error"] == "cleanup secondary"
+    assert result.run_result.error == "run primary"
 
 
 def test_cli_sidecar_input_preserves_typed_evidence(tmp_path):

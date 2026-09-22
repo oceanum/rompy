@@ -19,7 +19,7 @@ import yaml
 
 import rompy
 from rompy.backends import DockerConfig, LocalConfig, SlurmConfig
-from rompy.core.responses import PipelineFailure, PostprocessFailure, PostprocessSuccess
+from rompy.core.responses import GenerateFailure, PipelineFailure, PostprocessFailure, PostprocessSuccess
 from rompy.logging import LogFormat, LoggingConfig, LogLevel, get_logger
 from rompy.model import PIPELINE_BACKENDS, POSTPROCESSORS, RUN_BACKENDS, ModelRun
 from rompy.templating import render_templates
@@ -372,6 +372,7 @@ def run(
             "Must specify either config file, --config-from-env, or --generate-result"
         )
 
+    current_result = None
     try:
         # Sidecar-driven flow
         if generate_result_path:
@@ -423,6 +424,7 @@ def run(
                 return
 
             result = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
+            current_result = result
 
         # Config-driven flow (existing behaviour)
         else:
@@ -457,6 +459,7 @@ def run(
                 logger.info(f"Using existing workspace: {staging_dir}")
             else:
                 generate_result = model_run.generate()
+                current_result = generate_result
                 staging_dir = generate_result.staging_dir or str(model_run.staging_dir)
                 logger.info(f"Inputs generated in: {staging_dir}")
                 if not generate_result.success:
@@ -467,6 +470,7 @@ def run(
                 return
 
             result = model_run.run(backend=backend_cfg, workspace_dir=staging_dir)
+            current_result = result
 
         elapsed = datetime.now() - start_time
         if result.success:
@@ -501,9 +505,12 @@ def run(
 
         # Emit error JSON if requested.
         if json_output:
-            current = locals().get("result")
+            current = current_result
             if current is not None and hasattr(current, "success"):
-                print(json.dumps(_result_envelope(current, "run_result", staging_dir=getattr(current, "workspace_dir", None))))
+                is_generation = isinstance(current, GenerateFailure)
+                kind = "generate_result" if is_generation else "run_result"
+                current_staging = getattr(current, "staging_dir", None) or getattr(current, "workspace_dir", None)
+                print(json.dumps(_result_envelope(current, kind, staging_dir=current_staging)))
             else:
                 print(json.dumps({"success": False, "error": str(e)}))
 

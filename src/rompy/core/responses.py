@@ -327,6 +327,8 @@ class PipelineFailure(_ResultBase):
     staging_dir: str | None = None
     workspace_dir: str | None = None
     output_dir: str | None = None
+    generate_result: GenerateFailure | None = None
+    run_result: ModelRunFailure | None = None
     postprocess_results: PostprocessFailure | None = None
     message: str | None = None
 
@@ -338,13 +340,23 @@ class PipelineFailure(_ResultBase):
             raise ValueError(
                 f"stages_completed must be the successful prefix before {self.failed_stage.value}"
             )
+        nested = {
+            PipelineStage.GENERATE: self.generate_result,
+            PipelineStage.RUN: self.run_result,
+            PipelineStage.POSTPROCESS: self.postprocess_results,
+        }
+        failed_result = nested[self.failed_stage]
+        if failed_result is not None and failed_result.run_id != self.run_id:
+            raise ValueError("pipeline and nested stage run_id must match")
         if self.failed_stage is PipelineStage.POSTPROCESS:
             if self.postprocess_results is None:
                 raise ValueError("postprocess failure must retain postprocess_results")
-            if self.postprocess_results.run_id != self.run_id:
-                raise ValueError("pipeline and postprocess run_id must match")
         elif self.postprocess_results is not None:
             raise ValueError("postprocess_results is only valid for postprocess failure")
+        if self.failed_stage is not PipelineStage.GENERATE and self.generate_result is not None:
+            raise ValueError("generate_result is only valid for generate failure")
+        if self.failed_stage is not PipelineStage.RUN and self.run_result is not None:
+            raise ValueError("run_result is only valid for run failure")
         return self
 
 

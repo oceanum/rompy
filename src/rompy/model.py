@@ -698,12 +698,30 @@ class ModelRun(RompyBaseModel):
             return result
 
         except Exception as e:
-            # Wrap any exceptions in ModelRunResult while retaining a generated path.
+            # A backend may generate implicitly before raising.  Recover that
+            # typed generation path so the failure remains durable and useful.
             known_workspace = locals().get("effective_workspace")
             if known_workspace is None and workspace_dir:
                 known_workspace = Path(workspace_dir)
+            if known_workspace is None:
+                generated = locals().get("backend_instance")
+                generated_result = getattr(generated, "generate_result", None)
+                if isinstance(generated_result, (GenerateSuccess, GenerateFailure)):
+                    known_workspace = (
+                        Path(generated_result.staging_dir)
+                        if generated_result.staging_dir
+                        else None
+                    )
             workspace_dir_str = str(known_workspace) if known_workspace else None
+            normalized_ctx = (
+                self._compute_run_normalized_context(workspace_dir_str)
+                if workspace_dir_str
+                else None
+            )
 
+            output_dir_path = Path(self.output_dir) if self.output_dir else None
+            if output_dir_path is not None and self.run_id_subdir:
+                output_dir_path = output_dir_path / self.run_id
             result = _make_model_run_result(
                 success=False,
                 run_id=self.run_id,
@@ -712,7 +730,7 @@ class ModelRun(RompyBaseModel):
                     if isinstance(backend, BaseBackendConfig)
                     else "unknown"
                 ),
-                output_dir=str(self.output_dir),
+                output_dir=str(output_dir_path) if output_dir_path else str(self.output_dir),
                 workspace_dir=workspace_dir_str,
                 error=str(e),
                 message=f"Model execution failed with exception: {str(e)}",
@@ -720,14 +738,20 @@ class ModelRun(RompyBaseModel):
                     start_time=start_time,
                     end_time=datetime.now(timezone.utc),
                 ),
+                metadata=(
+                    {"normalized_context": normalized_ctx.model_dump(mode="json")}
+                    if normalized_ctx is not None
+                    else {}
+                ),
             )
 
-            # Write run_result.json sidecar
+            # Write run_result.json sidecar at the recovered generated path.
             if known_workspace:
                 from rompy.core.result_persistence import persist_result
 
-                normalized_ctx = self._compute_run_normalized_context(str(known_workspace))
-
+                normalized_ctx = normalized_ctx or self._compute_run_normalized_context(
+                    str(known_workspace)
+                )
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     updated_at=None,
@@ -739,7 +763,12 @@ class ModelRun(RompyBaseModel):
                     normalized_context=normalized_ctx,
                     payload=result,
                 )
-                result = persist_result(result, sidecar, known_workspace, primary_error=result.error if not result.success else None)
+                result = persist_result(
+                    result,
+                    sidecar,
+                    known_workspace,
+                    primary_error=result.error,
+                )
 
             return result
 
