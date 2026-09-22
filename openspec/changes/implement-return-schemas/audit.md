@@ -6,7 +6,18 @@
 
 ## Executive verdict / Gate
 
-**Gate: BLOCK.** The substantive audit is complete, but Gate 1 cannot pass yet. The current implementation has P1 contract defects, and compatibility/version policy (D1), artifact identity and expected/missing-output policy (D2), and persistence-failure behavior remain owner decisions. Core schema implementation and downstream plugin adaptation must remain blocked until the contract is frozen.
+**Historical audit gate:** BLOCK at the audited revision. The findings below
+were recorded before issue #3 owner decisions. Issue #3 now freezes the
+contract decisions for version rejection, numeric seconds, artifact identity,
+typed generation, and observable persistence failure in the surrounding
+OpenSpec documents. Runtime implementation remains the responsibility of #4
+and #5, and fixture publication remains the responsibility of #6; this audit
+does not claim those follow-ups are complete.
+
+**Reconciliation note:** Findings that describe pending owner decisions or the
+pre-decision API are historical evidence, not current contract requirements.
+The authoritative requirements are `proposal.md`, `design.md`, `tasks.md`, and
+`specs/**` in this change.
 
 The audit examined discriminators, fields, timing, stage progression, cleanup, nested failures, partial evidence, direct Python, pipeline, CLI, and fresh-process contracts. Findings below are retained only where they have source evidence and a falsifiable test shape.
 
@@ -58,7 +69,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 **Owner:** #4.
 
-### 3. P1 — Version compatibility is ambiguous and asymmetric
+### 3. P1 — Version compatibility was ambiguous and asymmetric at audit time
 
 **Evidence**
 
@@ -75,7 +86,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 **Owner:** #3.
 
-### 4. P1 — Artifact identity and expected/missing-output evidence are undefined
+### 4. P1 — Artifact identity and expected/missing-output evidence were undefined at audit time
 
 **Evidence**
 
@@ -128,7 +139,7 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 **Owner:** #5.
 
-### 7. P1 — Persistence failures are hidden and successful writes are not crash-durable
+### 7. P1 — Persistence failures were hidden and successful writes were not crash-durable at audit time
 
 **Evidence**
 
@@ -144,19 +155,24 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 **Owner:** #3 for the persistence-failure contract decision; #4 for implementation and failure-injection testing.
 
-### 8. P2 — OpenSpec and migration documentation describe conflicting APIs
+### 8. P2 — OpenSpec and migration documentation described conflicting APIs at audit time
 
 **Evidence**
 
-- OpenSpec and `ModelRunResult` documentation refer to `run_detailed()` and boolean `run()` (`openspec/changes/implement-return-schemas/specs/result-schemas/spec.md:41-53`; `src/rompy/core/responses.py:412-436`).
-- Implementation exposes typed `ModelRun.run()` and no `run_detailed()` (`src/rompy/model.py:533-746`).
-- OpenSpec claims `PipelineResult.model_validate(...)`, although `PipelineResult` is an `Annotated` alias rather than a model class (`src/rompy/core/responses.py:398-401`; `openspec/changes/implement-return-schemas/specs/result-serialization/spec.md:47-57`).
+- The audited OpenSpec and `ModelRunResult` documentation described an obsolete
+  alternate/scalar API (`src/rompy/core/responses.py:412-436`).
+- The audited implementation exposed typed `ModelRun.run()` (`src/rompy/model.py:533-746`).
+- The audited OpenSpec claimed validation on a union alias rather than a concrete
+  envelope (`src/rompy/core/responses.py:398-401`).  Issue #3 now requires an
+  explicit concrete loader or union adapter.
 
 **Impact:** Consumers following the documentation call nonexistent APIs or depend on obsolete return types.
 
 **Smallest safe resolution:** Reconcile OpenSpec, migration material, docstrings, and public deserialization examples with the current implementation's `run() -> ModelRunResult` behavior; explicitly approve or revise that public contract in #3, and document an explicit union adapter.
 
-**Test shape:** Add API characterization tests for `run()`, absence/presence of `run_detailed()`, union adapter deserialization, and all documented examples; run documentation snippets against the public package.
+**Test shape:** Add API characterization tests for typed `run()`, explicit
+union-adapter deserialization, and all documented examples; run documentation
+snippets against the public package.
 
 **Owner:** #3.
 
@@ -164,17 +180,17 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 | Area | Current contradiction | Required disposition |
 |---|---|---|
-| Run API | OpenSpec says boolean `run()` plus `run_detailed()`; current implementation returns typed `run() -> ModelRunResult` and the execution plan describes that direction | Reconcile and explicitly approve or revise the public contract in #3; update documents only after that decision. |
-| Generate API | Direct Python returns a path/raises while a typed result exists only in a sidecar | Owner decision 3: approve typed migration or explicitly retain path/raise compatibility. |
-| Versions | Generate/run accept v1/v2 as one shape; CLI imposes a separate context rule; postprocess is v1-only | Owner decision 1. |
-| Interval encoding | Producers emit `3600s`; three tests expect `1:00:00`; no controlling spec fixes either | Freeze one representation under owner decision 1. |
-| Artifacts | Model accepts local/absolute/URI-like strings; CLI treats all as local and drops missing entries | Owner decision 2. |
+| Execution API | Audited OpenSpec described an obsolete alternate/scalar API while implementation evidence was typed | Resolved by #3: `run() -> ModelRunResult`; #4/#5 implement and validate. |
+| Generate API | Audited direct Python and sidecar paths differed | Resolved by #3: generation moves toward typed results; #4 implements. |
+| Versions | Audited loaders accepted mixed versions asymmetrically | Resolved by #3: strict current version and actionable rejection; #4 implements. |
+| Interval encoding | Audited producers/tests disagreed on duration text | Resolved by #3: numeric seconds on the wire; #4 implements. |
+| Artifacts | Audited paths and expected outputs were conflated | Resolved by #3: typed local/remote identity and separate evidence; #4/#5 implement. |
 | Processor input | Execution plan already mandates `ModelRunResult`; local and CLI implementations diverge | No new decision: implement fixed rule in #5. |
 | Stage completion | OpenSpec excludes a failed stage; one test expects failed postprocess as completed | Treat implementation and that test as stale; use OpenSpec sequence. |
-| Persistence failure | Producers hide failures; epic requires observable failures | Owner decision 3. |
-| Atomicity | Current code provides atomic replacement visibility, not crash durability | Define durability level with persistence policy. |
+| Persistence failure | Producers hid failures; epic requires observable failures | Resolved by #3; #4 implements typed diagnostics. |
+| Atomicity | Current code provides atomic replacement visibility, not crash durability | #4 defines and validates the promised durability level. |
 
-## Proposed invariant matrix (not yet approved)
+## Approved invariant matrix (resolved by issue #3)
 
 | Concern | Proposed canonical invariant |
 |---|---|
@@ -198,10 +214,10 @@ The audit examined discriminators, fields, timing, stage progression, cleanup, n
 
 ## Prioritized TDD slices and ownership
 
-1. **#3 — Contract characterization and decisions:** Freeze D1/D2, reconcile and explicitly approve or revise the generate/run API (including the current typed `run()` implementation), processor protocol, duration encoding, version behavior, and persistence-failure policy. Add tests for approved deserialization APIs.
+1. **#3 — Contract characterization and decisions:** **Complete in this change.** The surrounding OpenSpec documents freeze the generate/run API, processor protocol boundary, duration encoding, version behavior, artifact identity, and persistence-failure policy.
 2. **#4 — Schema coherence, timing, round trips, and persistence implementation:** Add mutation matrices, model/JSON and writer/loader round trips, UTC/order/duration/version/metadata tests, and implementation/failure-injection tests for the #3-approved persistence policy.
 3. **#5 — Typed processor equivalence and pipeline semantics:** Test exact processor input across direct Python, pipeline, CLI, and fresh process; reject malformed outputs; test strict stage prefixes, nested failures, cleanup, and `run_id_subdir=False`.
-4. **#6 — CLI parity, fixtures, and adversarial freeze:** Establish one JSON/exit policy, repair obsolete invocations, publish stable success/failure fixtures and hashes, and test malformed/unsupported-version and fresh-subprocess replay behavior.
+4. **#6 — Fixture and adversarial freeze:** Freeze stable success/failure/malformed/legacy fixtures and hashes, and test malformed/unsupported-version and fresh-subprocess replay behavior after #4/#5 implement the contract. CLI JSON/exit policy and obsolete-invocation repair belong to #5.
 
 ## Baseline command and failure classification
 
@@ -217,19 +233,22 @@ uv run --no-sync --directory rompy pytest -q tests/test_responses.py tests/test_
 | Failures | Classification | Disposition |
 |---|---|---|
 | Three normalized-context interval assertions | Contract drift: tests expect timedelta text while producers deliberately emit seconds strings | Decide canonical duration encoding, then update assertions; not an environment failure. |
-| Four CLI postprocess JSON tests | Stale tests use model-configuration YAML where current CLI requires a staging directory or `run_result.json` | Repair invocation and retain JSON/exit assertions. |
+| Four CLI postprocess JSON tests | Stale tests use model-configuration YAML where current CLI requires a staging directory or `run_result.json` | #5 repairs invocation and retains JSON/exit assertions under one CLI policy. |
 | Setup/environment failures | None evidenced | No action. |
 | Unrelated failures | None evidenced | No action. |
 
 Warnings are not causes of the seven failures. The unknown integration mark and unrelated WW3 Pydantic deprecation should be tracked separately if desired.
 
-## Owner decisions still pending (maximum three)
+## Owner decisions resolved by issue #3 (historical pending section)
 
-1. **Compatibility/versioning (D1):** Migrate only demonstrably released core-v1 or WW3-flat-v1 artifacts through an explicit one-way reader; reject all other legacy/ambiguous documents. Also freeze one interval encoding.
-2. **Artifact identity (D2):** Use staging-relative local paths, a separate remote URI/external-location variant, observed-only `artifacts`, and structured expected/missing evidence.
-3. **Failure policy:** Decide the direct-generate compatibility transition and make persistence failure observable—prefer a typed persistence diagnostic/failure rather than silent operational success. Define whether crash durability requires file and directory fsync.
+1. **Compatibility/versioning (D1):** Resolved by #3: reject legacy/ambiguous core-v1 and flat WW3-v1 artifacts with actionable kind/version errors; no migration reader now. Wire intervals/durations are numeric seconds.
+2. **Artifact identity (D2):** Resolved by #3: use staging-relative local paths, an explicit remote URI variant, observed-only `artifacts`, and structured expected/missing evidence.
+3. **Failure policy:** Resolved by #3: generation moves toward typed results and required canonical persistence failure is observable while retaining any primary operation error. #4 defines the promised durability details during implementation.
 
-Processor input remains an execution-plan recommendation for #5. The current typed `run()` return is implementation evidence, but its public contract still requires explicit reconciliation and approval in #3 because the OpenSpec documents a conflicting boolean `run()`/`run_detailed()` API.
+Processor input is now an issue #3 contract requirement for #5 to implement.
+The current typed `run()` return is implementation evidence and is explicitly
+approved as the public direction; #5 must make equivalent handoffs true across
+all execution paths.
 
 ## Acceptance checklist
 
@@ -239,21 +258,23 @@ Processor input remains an execution-plan recommendation for #5. The current typ
 - [x] Findings include source evidence, observable impact, smallest resolution, falsifiable test shape, and follow-up ownership.
 - [x] Focused baseline failures classified with command/log reference.
 - [x] Contradiction/decision table recorded.
-- [x] Proposed invariant matrix recorded and explicitly marked pending approval.
+- [x] Invariant matrix recorded and approved by issue #3 contract documents.
 - [x] Prioritized TDD slices mapped to #3–#6.
 - [x] No source behavior changed; plugins remain unchanged.
-- [ ] D1 compatibility/version policy approved.
-- [ ] D2 artifact identity and expected/missing policy approved.
-- [ ] Persistence-failure and generate-failure policy approved.
-- [ ] Canonical schema/version/artifact/processor contract committed.
-- [ ] No unresolved P1 contract findings remain before schema freeze.
+- [x] D1 compatibility/version policy approved by issue #3.
+- [x] D2 artifact identity and expected/missing policy approved by issue #3.
+- [x] Persistence-failure and generate-failure policy approved by issue #3.
+- [x] Canonical schema/version/artifact/processor contract documented in this change.
+- [ ] Runtime P1 implementation findings remain for #4/#5; they are not contract blockers for issue #3.
 
 ## Residual risks
 
 - This audit is documentation-only; conclusions rely on the supplied baseline log and evidence synthesis rather than a new test run.
-- Compatibility cannot be finalized without evidence identifying which legacy formats were actually released or persisted.
+- Strict rejection of legacy/ambiguous sidecars is approved; #4/#5 must implement and verify actionable kind/version rejection.
 - Fixture hashes and fresh-process validation belong to #6 and do not yet exist.
-- The current Gate BLOCK means this artifact should not be read as approval to implement schemas or adapt plugins.
+- The historical Gate BLOCK was cleared for contract definition by issue #3;
+  runtime schema/plugin implementation remains out of scope here and belongs to
+  #4/#5.
 
 ## Scope and impact note
 

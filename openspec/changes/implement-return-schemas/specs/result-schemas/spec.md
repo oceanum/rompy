@@ -1,124 +1,142 @@
 ## ADDED Requirements
 
-### Requirement: Postprocess operations return structured results
-The system SHALL return `PostprocessResult` from all postprocess operations instead of untyped dictionaries.
+### Requirement: Typed discriminated operation results
+The system SHALL expose typed success/failure results for generation, execution,
+pipeline, and postprocessing.  `PostprocessResult` SHALL be
+`PostprocessSuccess | PostprocessFailure`; `PipelineResult` SHALL be
+`PipelineSuccess | PipelineFailure`; `ModelRunResult` and `GenerateResult` SHALL
+use the same discriminator pattern.
+
+The approved variants SHALL use these required fields:
+
+- `GenerateSuccess`: `success=true`, `run_id`, `staging_dir`,
+  `generated_files`, and `timing`; `GenerateFailure`: `success=false`,
+  `run_id`, `error`, `generated_files`, and `timing`, with known staging/config
+  paths optional.
+- `ModelRunSuccess`: `success=true`, `run_id`, `backend_used`, `output_dir`,
+  `timing`, and typed `artifacts`, `expected_outputs`, and `missing_outputs`;
+  `ModelRunFailure`: `success=false`, `run_id`, `backend_used`, `error`,
+  `timing`, and the same three evidence lists, with output/workspace paths
+  optional.
+- `PostprocessSuccess`: `success=true`, `run_id`, `output_dir`, `validated`,
+  `timing`, and the three typed evidence lists; `PostprocessFailure`:
+  `success=false`, `run_id`, `error`, `timing`, and those evidence lists, with
+  `output_dir` optional.
+- `PipelineSuccess`: `success=true`, `run_id`, exact successful stage list,
+  `backend`, `processor`, `staging_dir`, `output_dir`, nested
+  `PostprocessSuccess`, `timing`, and `stage_timings`; `PipelineFailure`:
+  `success=false`, `run_id`, strict successful prefix, `backend`, `processor`,
+  `failed_stage`, `error`, `timing`, `stage_timings`, and `cleaned_up`, with
+  known paths optional and nested `PostprocessFailure` required when the
+  failed stage is `POSTPROCESS`.
+
+Every timing is UTC and every failure timing is mandatory.  Every operation
+variant may carry optional JSON-safe `metadata`; a persistence failure carries
+an exact `persistence_diagnostic` object with `status="failed"`,
+`sidecar_kind: str`, `sidecar_path: str`, `error: str`, and
+`primary_error: str | null`.
 
 #### Scenario: Successful postprocessing
-- **WHEN** a postprocess operation completes successfully
-- **THEN** system returns `PostprocessSuccess` with success=True, run_id, output_dir, validated flag, and optional file_count
+- **WHEN** postprocessing completes successfully
+- **THEN** the result is `PostprocessSuccess` with `success=true`, `run_id`, output location, timing, observed artifacts, and validation evidence.
 
 #### Scenario: Failed postprocessing
-- **WHEN** a postprocess operation fails
-- **THEN** system returns `PostprocessFailure` with success=False, run_id, error message, and optional output_dir
+- **WHEN** postprocessing fails
+- **THEN** the result is `PostprocessFailure` with `success=false`, `run_id`, an error, timing, and any known paths/artifacts/evidence.
 
-#### Scenario: Type narrowing on success field
-- **WHEN** consumer checks `result.success == True`
-- **THEN** type checker narrows type to `PostprocessSuccess` and allows access to success-only fields
+#### Scenario: Typed model execution
+- **WHEN** `run(backend, workspace_dir=None)` completes or fails
+- **THEN** it returns `ModelRunResult`, not a boolean and not an untyped dictionary.
 
-### Requirement: Pipeline operations return structured results
-The system SHALL return `PipelineResult` from all pipeline operations instead of untyped dictionaries.
+#### Scenario: Typed generation
+- **WHEN** generation completes or fails at the canonical boundary
+- **THEN** it produces a typed `GenerateResult` and canonical sidecar evidence.
 
-#### Scenario: Fully successful pipeline
-- **WHEN** all pipeline stages (generate, run, postprocess) complete successfully
-- **THEN** system returns `PipelineSuccess` with all stages in stages_completed list and nested PostprocessSuccess
+#### Scenario: Invalid discriminator state
+- **WHEN** a result claims success while carrying a failure error, or claims failure without an error
+- **THEN** validation rejects the result with an actionable validation error.
 
-#### Scenario: Pipeline fails at generation stage
-- **WHEN** the generate stage fails
-- **THEN** system returns `PipelineFailure` with failed_stage=GENERATE, empty stages_completed, and no staging_dir
+#### Scenario: Malformed canonical envelope
+- **WHEN** a syntactically valid envelope disagrees with its payload on `run_id` or `success`
+- **THEN** the loader rejects it with an actionable envelope/payload coherence error identifying the mismatched fields.
 
-#### Scenario: Pipeline fails at run stage
-- **WHEN** the run stage fails but generation succeeded
-- **THEN** system returns `PipelineFailure` with failed_stage=RUN, stages_completed=[GENERATE], and staging_dir populated
+### Requirement: Coherent sidecar envelopes
+Each canonical sidecar SHALL contain one supported `kind`, the strict current
+integer `schema_version` (`2`), `run_id`, `status`, `success`, and a matching
+payload.  Envelope and payload identity/state SHALL agree.
 
-#### Scenario: Pipeline fails at postprocess stage
-- **WHEN** the postprocess stage fails but generate and run succeeded
-- **THEN** system returns `PipelineFailure` with failed_stage=POSTPROCESS, stages_completed=[GENERATE, RUN], and nested PostprocessFailure
+#### Scenario: Coherent success envelope
+- **WHEN** a successful sidecar is loaded
+- **THEN** kind, version, run ID, `status="success"`, `success=true`, and payload success/run ID all agree.
 
-#### Scenario: Type narrowing on pipeline success
-- **WHEN** consumer checks `result.success == True`
-- **THEN** type checker narrows type to `PipelineSuccess` and postprocess_results is guaranteed to be PostprocessSuccess
+#### Scenario: Coherent failure envelope
+- **WHEN** a failed sidecar is loaded
+- **THEN** kind, version, run ID, `status="failed"`, `success=false`, and payload error/run ID all agree.
 
-### Requirement: Model run operations return structured results
-The system SHALL provide a method that returns `ModelRunResult` from run operations with detailed execution information.
+#### Scenario: Contradictory envelope
+- **WHEN** kind, version, run ID, status, success, payload family, or payload identity disagree
+- **THEN** loading fails rather than normalizing or silently accepting the document.
 
-#### Scenario: Successful model run with details
-- **WHEN** a model run completes successfully via run_detailed()
-- **THEN** system returns ModelRunResult with success=True, backend_used, timing info, and output paths
+### Requirement: UTC timing and numeric seconds
+All result timing SHALL use timezone-aware UTC timestamps with `end_time >=
+start_time`.  Duration, interval, and stage-duration wire values SHALL be
+numeric seconds; duration SHALL be derived from timestamps and preserve
+sub-second precision.
 
-#### Scenario: Failed model run with details
-- **WHEN** a model run fails via run_detailed()
-- **THEN** system returns ModelRunResult with success=False, backend_used, error message, and partial timing
+#### Scenario: Valid interval
+- **WHEN** a result contains `start_time="2026-03-10T10:00:00Z"`, `end_time="2026-03-10T10:00:02.25Z"`, and `duration_seconds=2.25`
+- **THEN** validation succeeds and the computed duration is `2.25`.
 
-#### Scenario: Backward compatibility of run() method
-- **WHEN** existing code calls run() method
-- **THEN** system continues to return boolean without breaking existing consumers
+#### Scenario: Invalid timing
+- **WHEN** timestamps are naïve, non-UTC, reversed, or duration is a nonnumeric human-readable string
+- **THEN** validation fails.
 
-### Requirement: Results use discriminated unions
-The system SHALL use Pydantic discriminated unions with 'success' field as discriminator for result types.
+### Requirement: Typed artifact identity and output evidence
+Artifacts SHALL be typed local or remote identities.  Local identity SHALL be a
+normalized staging-relative path with no absolute or traversal component. Remote
+identity SHALL be an explicit URI variant and SHALL NOT be interpreted as a
+local path. `artifacts` SHALL contain observed outputs only; expected and
+missing outputs SHALL be separate structured collections.
 
-#### Scenario: Discriminator enables type narrowing
-- **WHEN** result object is created with success=True
-- **THEN** Pydantic validates it as the Success variant and rejects failure-only fields
+#### Scenario: Local and remote observed outputs
+- **WHEN** a processor observes a local NetCDF and an S3 summary
+- **THEN** artifacts preserve `{kind:"local", path:"outputs/waves.nc"}` and `{kind:"remote", uri:"s3://..."}` as distinct identities.
 
-#### Scenario: Discriminator prevents invalid states
-- **WHEN** attempting to create result with success=True but error field populated
-- **THEN** Pydantic validation fails with clear error message
+#### Scenario: Unsafe or ambiguous identity
+- **WHEN** an artifact path is absolute, contains `..`, is URI-like while marked local, or a remote URI is treated as a path
+- **THEN** validation rejects it.
 
-### Requirement: Results include execution context
-The system SHALL include run_id, backend/processor names, and directory paths in all result objects.
+#### Scenario: Missing expected output
+- **WHEN** an expected output is not observed
+- **THEN** it remains in `missing_outputs` with structured identity/reason evidence and is not silently removed from the result.
 
-#### Scenario: Pipeline result contains full execution context
-- **WHEN** pipeline completes (success or failure)
-- **THEN** result includes run_id, backend name, processor name, and all relevant directory paths
+### Requirement: Pipeline progression and failure evidence
+Pipeline stages SHALL be ordered `GENERATE`, `RUN`, `POSTPROCESS`.  Successful
+stages SHALL form a strict prefix before a failure; `failed_stage` SHALL NOT be
+present in `stages_completed`.
 
-#### Scenario: Postprocess result contains output location
-- **WHEN** postprocessing completes
-- **THEN** result includes output_dir path for locating processed files
+#### Scenario: Full success
+- **WHEN** all stages succeed
+- **THEN** `stages_completed` is exactly `[GENERATE, RUN, POSTPROCESS]` and nested postprocess evidence is successful.
 
-### Requirement: Results include stage progression tracking
-The system SHALL track which pipeline stages completed before any failure.
+#### Scenario: Stage failure
+- **WHEN** generate, run, or postprocess fails
+- **THEN** `stages_completed` is respectively `[]`, `[GENERATE]`, or `[GENERATE, RUN]`, and the failed stage's typed error/evidence is retained.
 
-#### Scenario: Tracking completed stages on success
-- **WHEN** pipeline succeeds
-- **THEN** stages_completed contains [GENERATE, RUN, POSTPROCESS] in order
+#### Scenario: Cleanup truthfulness
+- **WHEN** cleanup is disabled, succeeds, or fails
+- **THEN** `cleaned_up` is respectively false, true, or false, with cleanup diagnostics preserved without replacing the primary error.
 
-#### Scenario: Tracking completed stages on partial failure
-- **WHEN** pipeline fails at run stage
-- **THEN** stages_completed contains only [GENERATE] and failed_stage is RUN
+### Requirement: Canonical persistence failures are observable
+Canonical sidecar persistence SHALL be required for reported operation success.
+A write/serialization/replace failure SHALL produce an observable typed failure
+with sidecar kind/path and persistence error evidence.  If a primary operation
+also failed, both primary and persistence errors SHALL remain available.
 
-### Requirement: Results support metadata extension
-The system SHALL include a metadata dictionary field for backend and processor-specific details.
+#### Scenario: Persistence fails after operation success
+- **WHEN** the operation succeeds but its canonical sidecar cannot be persisted
+- **THEN** the returned typed result does not claim canonical success and exposes a persistence failure diagnostic.
 
-#### Scenario: Docker backend includes container metadata
-- **WHEN** Docker backend executes a run
-- **THEN** result metadata includes container_id and image name
-
-#### Scenario: Postprocessor includes validation details
-- **WHEN** postprocessor performs validation
-- **THEN** result metadata includes list of validated files
-
-### Requirement: Pipeline failures indicate cleanup status
-The system SHALL indicate whether output cleanup occurred after pipeline failure.
-
-#### Scenario: Cleanup performed on failure
-- **WHEN** pipeline fails with cleanup_on_failure=True
-- **THEN** result includes cleaned_up=True
-
-#### Scenario: No cleanup on failure
-- **WHEN** pipeline fails with cleanup_on_failure=False
-- **THEN** result includes cleaned_up=False and staging_dir/output_dir paths are preserved
-
-### Requirement: Results track generated artifacts
-The system SHALL track file artifacts generated during postprocessing operations.
-
-#### Scenario: Postprocess generates output artifacts
-- **WHEN** postprocessor creates output files (YAML, NetCDF, plots, etc.)
-- **THEN** result includes list of generated artifact paths with types
-
-#### Scenario: No artifacts generated
-- **WHEN** postprocessing completes without generating artifacts
-- **THEN** result includes empty artifacts list
-
-#### Scenario: Artifact type classification
-- **WHEN** artifacts are tracked
-- **THEN** each artifact includes file path and optional type classification (yaml, netcdf, plot, etc.)
+#### Scenario: Operation and persistence both fail
+- **WHEN** an operation error and sidecar write error occur
+- **THEN** the typed failure preserves the primary operation error and the persistence error.

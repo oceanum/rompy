@@ -1,72 +1,63 @@
 ## ADDED Requirements
 
-### Requirement: Results can be serialized to dictionaries
-The system SHALL support converting result objects to dictionaries via model_dump() for backward compatibility.
+### Requirement: Canonical results serialize without semantic loss
+Typed result models SHALL support dictionary and JSON serialization while
+preserving discriminator, envelope/payload coherence, typed artifact identity,
+expected/missing evidence, UTC timestamps, and numeric seconds.
 
-#### Scenario: Pipeline result to dict
-- **WHEN** calling result.model_dump() on PipelineResult
-- **THEN** returns dictionary with all fields including nested postprocess_results
+#### Scenario: Result to dictionary
+- **WHEN** a concrete success or failure result is dumped
+- **THEN** the dictionary contains the discriminator and all nested evidence with no URI/path rewriting.
 
-#### Scenario: Dict structure matches legacy format
-- **WHEN** dict serialization produces output
-- **THEN** key names and structure match historical dictionary returns for gradual migration
+#### Scenario: Result to JSON
+- **WHEN** a result is serialized as JSON
+- **THEN** timestamps are RFC 3339 UTC strings, durations/intervals are numeric seconds, and the JSON parses as an object.
 
-#### Scenario: Type information preserved in dict
-- **WHEN** serializing discriminated union to dict
-- **THEN** 'success' field correctly reflects True/False for Success/Failure variants
+#### Scenario: Human-readable formatting
+- **WHEN** a CLI or UI displays a duration
+- **THEN** it may format numeric seconds for people, but that presentation value is not written as the canonical wire value.
 
-### Requirement: Results can be serialized to JSON
-The system SHALL support converting result objects to JSON strings via model_dump_json().
+### Requirement: Canonical sidecars round-trip through explicit adapters
+Sidecar readers SHALL deserialize only the concrete, versioned canonical envelope
+for the requested kind.  Union aliases are typing annotations, not model classes;
+callers SHALL use the concrete envelope loader or an explicit Pydantic
+`TypeAdapter` for a result union rather than calling `model_validate` on an
+`Annotated` union alias.
 
-#### Scenario: JSON serialization of successful pipeline
-- **WHEN** calling result.model_dump_json() on PipelineSuccess
-- **THEN** returns valid JSON string with all fields properly formatted
+#### Scenario: Valid canonical round trip
+- **WHEN** a canonical envelope is dumped, written, loaded, and validated
+- **THEN** the same kind/version, typed result state, timing, artifact identities, and output evidence are reconstructed without deleting computed fields or rewriting paths/URIs.
 
-#### Scenario: Datetime fields serialized to ISO8601
-- **WHEN** JSON serialization includes TimingInfo
-- **THEN** start_time and end_time are formatted as ISO8601 strings with timezone
+#### Scenario: Normative example round trip
+- **WHEN** the bounded success and failure JSON examples in `design.md` are passed through the future concrete envelope loaders
+- **THEN** they validate and round-trip to semantically equivalent canonical JSON; executable validation is follow-up work for #4/#5 and frozen fixture/hash publication belongs to #6.
 
-#### Scenario: Optional fields omitted when None
-- **WHEN** JSON serialization includes optional fields with None values
-- **THEN** those fields can be excluded with exclude_none=True parameter
+#### Scenario: Malformed result
+- **WHEN** a required field is missing, a discriminator is contradictory, or a nested payload is the wrong family
+- **THEN** deserialization fails with an actionable validation error.
 
-### Requirement: Results support pretty-printed JSON
-The system SHALL support human-readable JSON output for debugging and logging.
+#### Scenario: Normative malformed example rejection
+- **WHEN** the bounded malformed JSON example in `design.md` is loaded
+- **THEN** deserialization rejects it for envelope/payload `run_id` and `success` mismatch; executable validation remains owned by #4/#5 and frozen replay by #6.
 
-#### Scenario: Pretty-printed JSON output
-- **WHEN** calling model_dump_json(indent=2)
-- **THEN** returns formatted JSON with 2-space indentation and newlines
+#### Scenario: Legacy or ambiguous sidecar
+- **WHEN** a core-v1 or flat WW3-v1 sidecar, missing version, boolean version, or unsupported version is loaded
+- **THEN** loading fails with an actionable kind/version error directing the caller to regenerate a canonical sidecar; no migration reader runs.
 
-#### Scenario: Readable error inspection
-- **WHEN** logging failed pipeline result
-- **THEN** pretty-printed JSON shows error message and context clearly
+### Requirement: External consumers receive one stable JSON shape
+External API, monitoring, and storage integrations SHALL consume the same
+canonical serialized shape used by local sidecar persistence.  They SHALL NOT
+receive a legacy dictionary shape or a path-filtered artifact list.
 
-### Requirement: External systems can consume serialized results
-The system SHALL produce serializable output that external tools can parse and process.
+#### Scenario: External result consumption
+- **WHEN** a result is sent to an API, database, or monitoring system
+- **THEN** its discriminator, typed artifact variants, expected/missing evidence, and numeric timing values remain machine-readable.
 
-#### Scenario: REST API returns result JSON
-- **WHEN** rompy is called via REST API
-- **THEN** JSON serialized result can be returned as HTTP response body
+### Requirement: Persistence diagnostics survive serialization
+A typed persistence failure SHALL serialize its sidecar kind/path, failure
+message, and any primary operation error.  A successful operation SHALL NOT be
+serialized as durably persisted when the required sidecar write failed.
 
-#### Scenario: Result stored in database
-- **WHEN** result needs persistence
-- **THEN** JSON serialization enables storage in JSON columns or document stores
-
-#### Scenario: Result passed to monitoring system
-- **WHEN** result sent to monitoring/alerting
-- **THEN** dict serialization provides structured data for metrics extraction
-
-### Requirement: Deserialization reconstructs typed objects
-The system SHALL support deserializing dictionaries back into typed result objects.
-
-#### Scenario: Reconstruct result from dict
-- **WHEN** calling PipelineResult.model_validate(dict_data)
-- **THEN** returns properly typed PipelineSuccess or PipelineFailure based on discriminator
-
-#### Scenario: Validation on deserialization
-- **WHEN** dict data is invalid or missing required fields
-- **THEN** Pydantic raises ValidationError with clear message
-
-#### Scenario: Discriminator routing on load
-- **WHEN** deserializing dict with success=True
-- **THEN** Pydantic constructs PipelineSuccess and validates success-specific fields
+#### Scenario: Failure evidence round trip
+- **WHEN** a result contains persistence failure evidence
+- **THEN** dictionary and JSON round trips retain both persistence and primary operation diagnostics.

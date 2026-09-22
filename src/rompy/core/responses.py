@@ -412,32 +412,38 @@ Examples:
 class ModelRunResult(RompyBaseModel):
     """Result from model execution via a backend.
 
-    Returned by `ModelRun.run_detailed()` to provide structured information
-    about model execution (without postprocessing).
+    Current concrete result returned by `ModelRun.run()` (without
+    postprocessing).  This model records the operation outcome and execution
+    context; `success` is a plain boolean and `error` is optional on this
+    current implementation.
 
     Attributes:
         success: Whether execution succeeded
         run_id: Run identifier (from ModelRun)
         backend_used: Backend class name
         output_dir: Output directory path
-        workspace_dir: Workspace directory (backend-specific)
-        timing: Execution timing
-        artifacts: List of output artifacts discovered after execution
-        error: Error message if success=False
-        message: Additional context
-        metadata: Backend-specific metadata (extensible dict)
+        workspace_dir: Workspace directory (optional)
+        timing: Execution timing information
+        artifacts: Observed output artifacts discovered after execution
+        error: Error message when available
+        message: Additional context (optional)
+        metadata: Backend-specific metadata (optional)
 
     Examples:
         ::
 
-            result = model_run.run_detailed(backend_config)
+            result = model_run.run(backend_config)
 
             if result.success:
                 print(f"Run completed in {result.timing.duration_seconds:.1f}s")
                 print(f"Output: {result.output_dir}")
-                print(f"Artifacts: {len(result.artifacts)}")
             else:
                 print(f"Run failed: {result.error}")
+
+    The approved future result contract, including discriminated variants,
+    expected/missing output evidence, and persistence diagnostics, is documented
+    in the issue #3 OpenSpec change for follow-up implementation in #4.  This
+    docstring describes only fields present on this concrete class today.
     """
 
     success: bool = Field(..., description="Whether execution succeeded")

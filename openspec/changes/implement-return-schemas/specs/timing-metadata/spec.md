@@ -1,49 +1,51 @@
 ## ADDED Requirements
 
-### Requirement: Results include execution timing information
-The system SHALL include start time, end time, and computed duration in all result objects.
+### Requirement: Results include complete execution timing
+Completed operations and pipeline failures SHALL include operation timing with
+`start_time`, `end_time`, and computed `duration_seconds`. Pipeline results SHALL
+also retain nested postprocess timing and stage timing evidence where a stage
+started or completed.
 
-#### Scenario: Pipeline result includes overall timing
-- **WHEN** pipeline execution completes
-- **THEN** result includes TimingInfo with start_time, end_time, and duration_seconds
+#### Scenario: Successful operation timing
+- **WHEN** generation, execution, postprocessing, or a pipeline succeeds
+- **THEN** its timing starts no later than the operation and ends no earlier than completion, with nonnegative computed seconds.
 
-#### Scenario: Nested postprocess timing preserved
-- **WHEN** pipeline contains postprocess results
-- **THEN** postprocess results include their own TimingInfo separate from pipeline timing
+#### Scenario: Failure timing
+- **WHEN** any stage fails
+- **THEN** timing ends at or after failure observation and remains available on the typed failure result.
 
-#### Scenario: Partial timing on failure
-- **WHEN** pipeline fails at any stage
-- **THEN** result includes TimingInfo representing time from start until failure
+### Requirement: Timestamps are UTC and ordered
+All canonical timestamps SHALL be timezone-aware UTC values.  `end_time` SHALL be
+greater than or equal to `start_time`; naïve, non-UTC, and reversed intervals
+SHALL fail validation.
 
-### Requirement: Timing uses UTC timestamps
-The system SHALL use UTC timezone for all start_time and end_time values.
+#### Scenario: UTC serialization
+- **WHEN** a timestamp is serialized
+- **THEN** it includes `Z` or an explicit `+00:00` offset.
 
-#### Scenario: Timestamp creation uses UTC
-- **WHEN** capturing start or end time
-- **THEN** system uses datetime.now(timezone.utc) to ensure consistent timezone
+#### Scenario: Invalid timestamp
+- **WHEN** a timestamp lacks timezone information, uses a non-UTC offset, or precedes its start
+- **THEN** validation fails with the field and invariant identified.
 
-#### Scenario: Serialized timestamps include timezone
-- **WHEN** result is serialized to JSON
-- **THEN** timestamps include 'Z' suffix or explicit UTC timezone offset
+### Requirement: Duration and intervals use numeric seconds
+`duration_seconds`, `period_interval`, and stage-duration wire fields SHALL be
+numeric seconds (including fractional seconds).  They SHALL be derived or
+validated against timestamps where applicable. Human-readable strings such as
+`"1:00:00"` or `"3600s"` SHALL NOT be canonical wire values.
 
-### Requirement: Duration computed from timestamps
-The system SHALL compute duration_seconds as a property derived from start_time and end_time.
+#### Scenario: Precision-preserving duration
+- **WHEN** timestamps differ by 2.25 seconds
+- **THEN** computed and serialized `duration_seconds` is numeric `2.25`.
 
-#### Scenario: Duration calculation
-- **WHEN** accessing duration_seconds
-- **THEN** system computes (end_time - start_time).total_seconds() automatically
+#### Scenario: Numeric modelling interval
+- **WHEN** a normalized execution context has a one-hour sampling interval
+- **THEN** its wire value is numeric `3600`, not a duration string.
 
-#### Scenario: Duration precision
-- **WHEN** duration is computed
-- **THEN** value is float with subsecond precision
+### Requirement: Timing round trips without surgery
+Model, JSON, and sidecar writer/loader round trips SHALL preserve timestamps and
+numeric duration semantics without callers deleting computed fields or changing
+wire types.
 
-### Requirement: Timing information aids debugging
-The system SHALL include timing at multiple levels (operation, stage, nested) to support performance analysis.
-
-#### Scenario: Identifying slow stages
-- **WHEN** analyzing failed pipeline
-- **THEN** timing shows how long each completed stage took before failure
-
-#### Scenario: Comparing operation durations
-- **WHEN** reviewing multiple pipeline runs
-- **THEN** timing enables comparison of overall duration and stage-level performance
+#### Scenario: Writer/loader round trip
+- **WHEN** a timed canonical result is written and loaded in a fresh process
+- **THEN** timing remains UTC-aware, ordered, and numerically equal within the model's precision.
