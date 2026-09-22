@@ -273,6 +273,24 @@ def test_persist_result_preserves_supplied_primary_error(tmp_path, monkeypatch):
     assert returned.persistence_diagnostic.primary_error == "model operation failed"
 
 
+def test_persist_result_handles_mutated_metadata_without_rethrow(tmp_path):
+    sidecar = run_sidecar()
+    result = sidecar.payload
+    result.metadata["mutated"] = object()
+
+    returned = result_persistence.persist_result(
+        result, sidecar, tmp_path, primary_error="operation failed"
+    )
+    assert isinstance(returned, ModelRunFailure)
+    assert returned.error == "operation failed"
+    assert returned.persistence_diagnostic.primary_error == "operation failed"
+    diagnostic_error = returned.persistence_diagnostic.error.lower()
+    assert "serializ" in diagnostic_error or "not json" in diagnostic_error
+    assert returned.metadata == {}
+    assert not (tmp_path / result_persistence.RUN_RESULT_FILENAME).exists()
+    assert list(tmp_path.glob(".run_result.json.*")) == []
+
+
 def test_replace_failure_cleans_temp_and_preserves_existing_destination(tmp_path, monkeypatch):
     path = result_persistence.write_run_result(tmp_path, run_sidecar())
     previous = path.read_bytes()

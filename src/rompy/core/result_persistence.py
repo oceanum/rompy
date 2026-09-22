@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from rompy.core.responses import (
+    ArtifactIdentity,
     GenerateFailure,
     GenerateResultSidecar,
     GenerateSuccess,
@@ -21,6 +23,7 @@ from rompy.core.responses import (
     PostprocessResultSidecar,
     PostprocessSuccess,
     RunResultSidecar,
+    TimingInfo,
 )
 
 GENERATE_RESULT_FILENAME = "generate_result.json"
@@ -124,51 +127,146 @@ def _load(
         raise ValueError(f"Invalid canonical {kind} sidecar {path}: {exc}") from exc
 
 
+def _safe_metadata(value: Any) -> dict[str, Any]:
+    """Copy JSON-safe metadata, dropping mutated invalid mappings."""
+    if not isinstance(value, dict):
+        return {}
+    try:
+        return json.loads(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError, OverflowError):
+        return {}
+
+
+def _safe_strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _safe_optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _safe_required_string(value: Any, default: str = "unknown") -> str:
+    return value if isinstance(value, str) and value else default
+
+
+def _safe_timing(value: Any) -> TimingInfo:
+    try:
+        raw = value.model_dump(mode="python")
+        return TimingInfo.model_validate(raw)
+    except Exception:  # noqa: BLE001 - fallback must not rethrow persistence errors
+        now = datetime.now(timezone.utc)
+        return TimingInfo(start_time=now, end_time=now)
+
+
+def _safe_evidence(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    adapter = TypeAdapter(ArtifactIdentity)
+    valid = []
+    for item in value:
+        try:
+            raw = item.model_dump(mode="python") if isinstance(item, BaseModel) else item
+            valid.append(adapter.validate_python(raw))
+        except Exception:  # noqa: BLE001, S112 - invalid mutable evidence is dropped
+            continue
+    return valid
+
+
 def _failure_with_diagnostic(result: Any, diagnostic: PersistenceDiagnostic, primary_error: str | None) -> Any:
-    """Return the corresponding typed failure after persistence fails."""
+    """Return the corresponding typed failure after persistence fails.
+
+    Result instances may have been mutated after Pydantic validation. Every
+    mutable value copied into the fallback is therefore normalized or dropped
+    before constructing the typed failure.
+    """
     operation_error = primary_error or getattr(result, "error", None)
+    metadata = _safe_metadata(getattr(result, "metadata", {}))
+    timing = _safe_timing(getattr(result, "timing", None))
+    error = _safe_required_string(operation_error, diagnostic.error)
+    run_id = _safe_required_string(getattr(result, "run_id", None))
     if isinstance(result, GenerateSuccess):
         return GenerateFailure(
-            run_id=result.run_id,
-            error=operation_error or diagnostic.error,
-            generated_files=result.generated_files,
-            timing=result.timing,
-            staging_dir=result.staging_dir,
-            config_file=result.config_file,
-            metadata=result.metadata,
+            run_id=run_id,
+            error=error,
+            generated_files=_safe_strings(getattr(result, "generated_files", [])),
+            timing=timing,
+            staging_dir=_safe_required_string(getattr(result, "staging_dir", None), "staging"),
+            config_file=_safe_optional_string(getattr(result, "config_file", None)),
+            metadata=metadata,
             persistence_diagnostic=diagnostic,
         )
     if isinstance(result, ModelRunSuccess):
         return ModelRunFailure(
-            run_id=result.run_id,
-            backend_used=result.backend_used,
-            error=operation_error or diagnostic.error,
-            timing=result.timing,
-            output_dir=result.output_dir,
-            workspace_dir=result.workspace_dir,
-            artifacts=result.artifacts,
-            expected_outputs=result.expected_outputs,
-            missing_outputs=result.missing_outputs,
-            message=result.message,
-            metadata=result.metadata,
+            run_id=run_id,
+            backend_used=_safe_required_string(getattr(result, "backend_used", None)),
+            error=error,
+            timing=timing,
+            output_dir=_safe_optional_string(getattr(result, "output_dir", None)),
+            workspace_dir=_safe_optional_string(getattr(result, "workspace_dir", None)),
+            artifacts=_safe_evidence(getattr(result, "artifacts", [])),
+            expected_outputs=_safe_evidence(getattr(result, "expected_outputs", [])),
+            missing_outputs=_safe_evidence(getattr(result, "missing_outputs", [])),
+            message=_safe_optional_string(getattr(result, "message", None)),
+            metadata=metadata,
             persistence_diagnostic=diagnostic,
         )
     if isinstance(result, PostprocessSuccess):
         return PostprocessFailure(
-            run_id=result.run_id,
-            error=operation_error or diagnostic.error,
-            timing=result.timing,
-            output_dir=result.output_dir,
-            artifacts=result.artifacts,
-            expected_outputs=result.expected_outputs,
-            missing_outputs=result.missing_outputs,
-            message=result.message,
-            metadata=result.metadata,
+            run_id=run_id,
+            error=error,
+            timing=timing,
+            output_dir=_safe_optional_string(getattr(result, "output_dir", None)),
+            artifacts=_safe_evidence(getattr(result, "artifacts", [])),
+            expected_outputs=_safe_evidence(getattr(result, "expected_outputs", [])),
+            missing_outputs=_safe_evidence(getattr(result, "missing_outputs", [])),
+            message=_safe_optional_string(getattr(result, "message", None)),
+            metadata=metadata,
             persistence_diagnostic=diagnostic,
         )
-    if isinstance(result, (GenerateFailure, ModelRunFailure, PostprocessFailure)):
+    if isinstance(result, GenerateFailure):
         return result.model_copy(
             update={
+                "run_id": run_id,
+                "error": error,
+                "generated_files": _safe_strings(getattr(result, "generated_files", [])),
+                "timing": timing,
+                "staging_dir": _safe_optional_string(getattr(result, "staging_dir", None)),
+                "config_file": _safe_optional_string(getattr(result, "config_file", None)),
+                "metadata": metadata,
+                "persistence_diagnostic": diagnostic,
+            }
+        )
+    if isinstance(result, ModelRunFailure):
+        return result.model_copy(
+            update={
+                "run_id": run_id,
+                "error": error,
+                "timing": timing,
+                "backend_used": _safe_required_string(getattr(result, "backend_used", None)),
+                "output_dir": _safe_optional_string(getattr(result, "output_dir", None)),
+                "workspace_dir": _safe_optional_string(getattr(result, "workspace_dir", None)),
+                "artifacts": _safe_evidence(getattr(result, "artifacts", [])),
+                "expected_outputs": _safe_evidence(getattr(result, "expected_outputs", [])),
+                "missing_outputs": _safe_evidence(getattr(result, "missing_outputs", [])),
+                "message": _safe_optional_string(getattr(result, "message", None)),
+                "metadata": metadata,
+                "persistence_diagnostic": diagnostic,
+            }
+        )
+    if isinstance(result, PostprocessFailure):
+        return result.model_copy(
+            update={
+                "run_id": run_id,
+                "error": error,
+                "timing": timing,
+                "output_dir": _safe_optional_string(getattr(result, "output_dir", None)),
+                "artifacts": _safe_evidence(getattr(result, "artifacts", [])),
+                "expected_outputs": _safe_evidence(getattr(result, "expected_outputs", [])),
+                "missing_outputs": _safe_evidence(getattr(result, "missing_outputs", [])),
+                "message": _safe_optional_string(getattr(result, "message", None)),
+                "metadata": metadata,
                 "persistence_diagnostic": diagnostic,
             }
         )
@@ -209,13 +307,19 @@ def persist_result(
     try:
         writer(staging_dir, sidecar)
     except Exception as exc:  # noqa: BLE001 - persistence must be observable
+        raw_primary_error = primary_error
+        if raw_primary_error is None:
+            raw_primary_error = getattr(result, "error", None)
+        safe_primary_error = (
+            raw_primary_error if isinstance(raw_primary_error, str) else None
+        )
         diagnostic = PersistenceDiagnostic(
             sidecar_kind=sidecar.kind,
             sidecar_path=str(sidecar_path),
             error=str(exc),
-            primary_error=primary_error or getattr(result, "error", None),
+            primary_error=safe_primary_error,
         )
-        return _failure_with_diagnostic(result, diagnostic, primary_error)
+        return _failure_with_diagnostic(result, diagnostic, safe_primary_error)
     return result
 
 
