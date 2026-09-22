@@ -1,5 +1,7 @@
-import pytest
+from pathlib import Path
+
 import httpx
+import pytest
 
 try:
     import respx
@@ -159,6 +161,8 @@ def test_datablob_http_get(tmp_download_dir):
         assert result.name == "test.nc"
         assert result.read_bytes() == content
         assert result.parent == tmp_download_dir
+        assert blob.copied_path == result
+        assert isinstance(blob.copied_path, Path)
 
 
 @pytest.mark.skipif(respx is None, reason="respx not installed")
