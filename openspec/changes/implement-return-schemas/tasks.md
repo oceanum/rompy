@@ -32,13 +32,14 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 
 ## #4 — schema, serialization, and persistence implementation (follow-up)
 
-- [ ] Implement discriminated result variants and envelope/payload validators.
-- [ ] Enforce strict current version/kind checks and actionable legacy rejection.
-- [ ] Implement UTC/order validation, numeric-seconds serialization, and lossless
+- [x] Implement discriminated result variants and envelope/payload validators.
+- [x] Enforce strict current version/kind checks and actionable legacy rejection.
+- [x] Implement UTC/order validation, numeric-seconds serialization, and lossless
   model/JSON/sidecar round trips.
-- [ ] Implement canonical atomic sidecar persistence and observable typed
-  persistence failures, retaining primary operation errors.
-- [ ] Add focused mutation and failure-injection tests for the approved contract.
+- [x] Implement canonical atomic sidecar persistence and the core typed
+  persistence adapter, retaining primary operation errors. Producer call-site
+  adoption remains owned by #5.
+- [x] Add focused mutation and failure-injection tests for the approved contract.
 
 ## #5 — processor, pipeline, and CLI handoffs (follow-up)
 
@@ -65,4 +66,4 @@ below are intentionally uncompleted unless a follow-up issue owns them.
   generated files, or unrelated docs.
 - Do not add a migration reader or a new shared package.
 - Do not add the frozen fixture corpus assigned to #6.
-- Do not mark #4, #5, or #6 implementation complete.
+- Do not mark #5 or #6 implementation complete; #4 core schema, adapter, and persistence tasks above are complete, while producer call-site adoption remains #5.

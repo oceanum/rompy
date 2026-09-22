@@ -1,924 +1,350 @@
-"""Unit tests for rompy response schemas (src/rompy/core/responses.py)."""
+"""Unit tests for the canonical issue #4 response schemas."""
 
 import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from rompy.core.responses import (
-    Artifact,
+    ArtifactIdentity,
     ArtifactType,
+    GenerateFailure,
     GenerateResult,
     GenerateResultSidecar,
+    GenerateSuccess,
+    LocalArtifact,
+    ModelRunFailure,
     ModelRunResult,
+    ModelRunSuccess,
+    PersistenceDiagnostic,
     PipelineFailure,
     PipelineResult,
     PipelineStage,
     PipelineSuccess,
     PostprocessFailure,
-    PostprocessResult,
     PostprocessResultSidecar,
     PostprocessSuccess,
+    RemoteArtifact,
     RunResultSidecar,
+    StageTiming,
     TimingInfo,
 )
 
-
-class TestArtifactType:
-    """Test ArtifactType enum."""
-
-    def test_enum_values(self):
-        """Test all enum values are present."""
-        assert ArtifactType.YAML == "yaml"
-        assert ArtifactType.NETCDF == "netcdf"
-        assert ArtifactType.PLOT == "plot"
-        assert ArtifactType.TEXT == "text"
-        assert ArtifactType.RESTART == "restart"
-        assert ArtifactType.OTHER == "other"
-
-    def test_enum_iteration(self):
-        """Test enum can be iterated."""
-        values = [e.value for e in ArtifactType]
-        assert values == ["yaml", "netcdf", "plot", "text", "restart", "other"]
+START = datetime(2026, 3, 10, 10, 0, tzinfo=timezone.utc)
 
 
-class TestPipelineStage:
-    """Test PipelineStage enum."""
-
-    def test_enum_values(self):
-        """Test all enum values are present."""
-        assert PipelineStage.GENERATE == "generate"
-        assert PipelineStage.RUN == "run"
-        assert PipelineStage.POSTPROCESS == "postprocess"
-
-    def test_enum_iteration(self):
-        """Test enum can be iterated."""
-        values = [e.value for e in PipelineStage]
-        assert values == ["generate", "run", "postprocess"]
+def timing(seconds: float = 1.0) -> TimingInfo:
+    return TimingInfo(start_time=START, end_time=START + timedelta(seconds=seconds))
 
 
-class TestArtifact:
-    """Test Artifact class."""
+def post_success(run_id: str = "run-1") -> PostprocessSuccess:
+    return PostprocessSuccess(
+        run_id=run_id,
+        output_dir="results/run-1",
+        validated=True,
+        timing=timing(2.0),
+        artifacts=[LocalArtifact(path="outputs/waves.nc", artifact_type=ArtifactType.NETCDF)],
+        expected_outputs=[LocalArtifact(path="outputs/waves.nc")],
+        missing_outputs=[LocalArtifact(path="outputs/wind.nc", reason="not produced")],
+    )
 
-    def test_minimal_artifact(self):
-        """Test artifact with only required fields."""
-        artifact = Artifact(path="/path/to/file.nc")
-        assert artifact.path == "/path/to/file.nc"
-        assert artifact.artifact_type is None
-        assert artifact.size_bytes is None
-        assert artifact.description is None
 
-    def test_full_artifact(self):
-        """Test artifact with all fields."""
-        artifact = Artifact(
-            path="/path/to/file.nc",
-            artifact_type=ArtifactType.NETCDF,
-            size_bytes=1024000,
-            description="Model output NetCDF file",
-        )
-        assert artifact.path == "/path/to/file.nc"
-        assert artifact.artifact_type == ArtifactType.NETCDF
-        assert artifact.size_bytes == 1024000
-        assert artifact.description == "Model output NetCDF file"
+def run_success(run_id: str = "run-1") -> ModelRunSuccess:
+    return ModelRunSuccess(
+        run_id=run_id,
+        backend_used="local",
+        output_dir="results/run-1",
+        timing=timing(2.25),
+        artifacts=[
+            LocalArtifact(path="outputs/waves.nc", artifact_type=ArtifactType.NETCDF),
+            RemoteArtifact(uri="s3://bucket/run-1/summary.json"),
+        ],
+        expected_outputs=[LocalArtifact(path="outputs/waves.nc")],
+        missing_outputs=[LocalArtifact(path="outputs/wind.nc", reason="not produced")],
+    )
 
-    def test_artifact_serialization(self):
-        """Test artifact can be serialized to dict/JSON."""
-        artifact = Artifact(
-            path="output.nc",
+
+class TestArtifactIdentity:
+    def test_local_and_remote_variants_round_trip(self):
+        adapter = TypeAdapter(ArtifactIdentity)
+        local = adapter.validate_python({"kind": "local", "path": "outputs/waves.nc"})
+        remote = adapter.validate_python({"kind": "remote", "uri": "s3://bucket/summary.json"})
+        assert local.path == "outputs/waves.nc"
+        assert remote.uri == "s3://bucket/summary.json"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            {"kind": "local", "path": "../outside.nc"},
+            {"kind": "local", "path": "/absolute.nc"},
+            {"kind": "local", "path": "s3://bucket/output.nc"},
+            {"kind": "remote", "uri": "file:///tmp/output.nc"},
+        ],
+    )
+    def test_rejects_unsafe_or_ambiguous_identity(self, raw):
+        with pytest.raises(ValidationError):
+            TypeAdapter(ArtifactIdentity).validate_python(raw)
+
+    def test_artifact_metadata_is_preserved(self):
+        artifact = LocalArtifact(
+            path="outputs/waves.nc",
             artifact_type=ArtifactType.NETCDF,
             size_bytes=2048,
+            description="wave output",
         )
-        data = artifact.model_dump()
-        assert data["path"] == "output.nc"
-        assert data["artifact_type"] == "netcdf"
-        assert data["size_bytes"] == 2048
-
-        # Test JSON serialization
-        json_str = artifact.model_dump_json()
-        assert '"path":"output.nc"' in json_str or '"path": "output.nc"' in json_str
-
-    def test_artifact_deserialization(self):
-        """Test artifact can be deserialized from dict."""
-        data = {
-            "path": "plot.png",
-            "artifact_type": "plot",
-            "size_bytes": 51200,
-            "description": "Wave height plot",
-        }
-        artifact = Artifact.model_validate(data)
-        assert artifact.path == "plot.png"
-        assert artifact.artifact_type == ArtifactType.PLOT
-        assert artifact.size_bytes == 51200
+        restored = LocalArtifact.model_validate(artifact.model_dump(mode="json"))
+        assert restored == artifact
 
 
 class TestTimingInfo:
-    """Test TimingInfo class with computed duration."""
+    def test_duration_is_computed_as_numeric_seconds(self):
+        value = timing(2.25)
+        assert value.duration_seconds == 2.25
+        assert value.model_dump(mode="json")["duration_seconds"] == 2.25
 
-    def test_duration_computation(self):
-        """Test duration_seconds is correctly computed."""
-        start = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2024, 1, 1, 12, 5, 30, tzinfo=timezone.utc)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        assert timing.start_time == start
-        assert timing.end_time == end
-        assert timing.duration_seconds == 330.0  # 5 minutes 30 seconds
-
-    def test_duration_milliseconds(self):
-        """Test duration works with sub-second precision."""
-        start = datetime(2024, 1, 1, 12, 0, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2024, 1, 1, 12, 0, 0, 500000, tzinfo=timezone.utc)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        assert timing.duration_seconds == 0.5
-
-    def test_duration_serialization(self):
-        """Test computed field is included in serialization."""
-        start = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2024, 1, 1, 12, 1, 0, tzinfo=timezone.utc)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        data = timing.model_dump()
-        assert "duration_seconds" in data
-        assert data["duration_seconds"] == 60.0
-
-    def test_timing_with_timedelta(self):
-        """Test timing with various durations."""
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(hours=2, minutes=30, seconds=45)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        expected = (2 * 3600) + (30 * 60) + 45
-        assert timing.duration_seconds == expected
+    def test_rejects_nonfinite_and_naive_non_utc_reversed_and_mismatched_timing(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValidationError, match="finite"):
+                TimingInfo(start_time=START, end_time=START, duration_seconds=value)
+        with pytest.raises(ValidationError, match="UTC"):
+            TimingInfo(start_time=datetime.fromisoformat("2026-01-01"), end_time=START)
+        with pytest.raises(ValidationError, match="UTC"):
+            TimingInfo(
+                start_time=START.replace(tzinfo=timezone(timedelta(hours=1))),
+                end_time=START,
+            )
+        with pytest.raises(ValidationError, match="end_time"):
+            TimingInfo(start_time=START, end_time=START - timedelta(seconds=1))
+        with pytest.raises(ValidationError, match="duration_seconds"):
+            TimingInfo(start_time=START, end_time=START, duration_seconds="1s")
+        with pytest.raises(ValidationError, match="does not match"):
+            TimingInfo(start_time=START, end_time=START, duration_seconds=1)
 
 
-class TestPostprocessResult:
-    """Test PostprocessResult discriminated union."""
-
-    def test_success_discriminator(self):
-        """Test discriminator enables type narrowing with success=True."""
-        result = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            file_count=5,
+class TestTypedResults:
+    def test_postprocess_success_and_failure_are_typed(self):
+        success = post_success()
+        failure = PostprocessFailure(
+            run_id="run-1",
+            error="validation failed",
+            output_dir="results/run-1",
+            timing=timing(),
+            artifacts=success.artifacts,
+            expected_outputs=success.expected_outputs,
+            missing_outputs=success.missing_outputs,
         )
+        assert success.success is True
+        assert failure.success is False
+        assert failure.error == "validation failed"
 
-        assert result.success is True
-        assert isinstance(result, PostprocessSuccess)
-        # Type narrowing: can access success-specific fields
-        assert result.output_dir == "/output"
-        assert result.file_count == 5
+    def test_model_run_union_deserializes_concrete_variant(self):
+        raw = run_success().model_dump(mode="json")
+        restored = TypeAdapter(ModelRunResult).validate_python(raw)
+        assert isinstance(restored, ModelRunSuccess)
+        assert restored.artifacts[1].uri == "s3://bucket/run-1/summary.json"
+        assert restored.missing_outputs[0].reason == "not produced"
 
-    def test_failure_discriminator(self):
-        """Test discriminator enables type narrowing with success=False."""
-        result = PostprocessFailure(
-            run_id="test-123",
-            error="Validation failed",
+    def test_required_evidence_fields_must_be_present_on_load(self):
+        raw = run_success().model_dump(mode="json")
+        for field in ("artifacts", "expected_outputs", "missing_outputs"):
+            missing = dict(raw)
+            missing.pop(field)
+            with pytest.raises(ValidationError, match=field):
+                TypeAdapter(ModelRunResult).validate_python(missing)
+
+        pipeline = PipelineSuccess(
+            run_id="run-1",
+            stages_completed=list(PipelineStage),
+            backend="local",
+            processor="processor",
+            staging_dir="staging/run-1",
+            output_dir="results/run-1",
+            postprocess_results=post_success(),
+            timing=timing(5),
+            stage_timings=[
+                StageTiming(stage=stage, timing=timing(1)) for stage in PipelineStage
+            ],
+        ).model_dump(mode="json")
+        pipeline.pop("stage_timings")
+        with pytest.raises(ValidationError, match="stage_timings"):
+            TypeAdapter(PipelineResult).validate_python(pipeline)
+
+    def test_generate_union_requires_variant_fields(self):
+        success = GenerateSuccess(
+            run_id="run-1",
+            staging_dir="staging/run-1",
+            generated_files=["config.nml"],
+            timing=timing(),
         )
-
-        assert result.success is False
-        assert isinstance(result, PostprocessFailure)
-        # Type narrowing: can access failure-specific fields
-        assert result.error == "Validation failed"
-
-    def test_success_with_artifacts(self):
-        """Test PostprocessSuccess with artifacts."""
-        artifacts = [
-            Artifact(path="output.nc", artifact_type=ArtifactType.NETCDF),
-            Artifact(path="plot.png", artifact_type=ArtifactType.PLOT),
-        ]
-        result = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            artifacts=artifacts,
+        failure = GenerateFailure(
+            run_id="run-1",
+            error="render failed",
+            generated_files=[],
+            timing=timing(),
         )
+        assert isinstance(TypeAdapter(GenerateResult).validate_python(success.model_dump()), GenerateSuccess)
+        assert isinstance(TypeAdapter(GenerateResult).validate_python(failure.model_dump()), GenerateFailure)
+        with pytest.raises(ValidationError):
+            TypeAdapter(GenerateResult).validate_python({"success": True, "run_id": "run-1"})
+        with pytest.raises(ValidationError):
+            GenerateSuccess(
+                run_id="run-1",
+                staging_dir="staging/run-1",
+                generated_files=[],
+                timing=timing(),
+                generated_at=START,
+            )
 
-        assert len(result.artifacts) == 2
-        assert result.artifacts[0].artifact_type == ArtifactType.NETCDF
-        assert result.artifacts[1].artifact_type == ArtifactType.PLOT
-
-    def test_failure_with_partial_artifacts(self):
-        """Test PostprocessFailure can include partial artifacts."""
-        partial_artifacts = [
-            Artifact(path="partial.nc", artifact_type=ArtifactType.NETCDF),
-        ]
-        result = PostprocessFailure(
-            run_id="test-123",
-            error="Processing failed midway",
-            artifacts=partial_artifacts,
+    def test_persistence_diagnostic_round_trip_preserves_primary_error(self):
+        result = ModelRunFailure(
+            run_id="run-1",
+            backend_used="local",
+            error="model failed",
+            timing=timing(),
+            artifacts=[],
+            expected_outputs=[],
+            missing_outputs=[],
+            persistence_diagnostic=PersistenceDiagnostic(
+                sidecar_kind="run_result",
+                sidecar_path="staging/run-1/run_result.json",
+                error="permission denied",
+                primary_error="model failed",
+            ),
         )
+        restored = ModelRunFailure.model_validate(result.model_dump(mode="json"))
+        assert restored.persistence_diagnostic.primary_error == "model failed"
 
-        assert len(result.artifacts) == 1
-        assert result.error == "Processing failed midway"
-
-    def test_success_with_timing(self):
-        """Test PostprocessSuccess with timing information."""
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(seconds=45)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        result = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            timing=timing,
-        )
-
-        assert result.timing is not None
-        assert result.timing.duration_seconds == 45.0
-
-    def test_postprocess_serialization_roundtrip(self):
-        """Test PostprocessResult can be serialized and deserialized."""
-        original = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            file_count=3,
-            message="All good",
-        )
-
-        # Serialize to dict
-        data = original.model_dump()
-        assert data["success"] is True
-        assert data["run_id"] == "test-123"
-
-        # Deserialize back (Pydantic will use discriminator)
-        reconstructed = PostprocessSuccess.model_validate(data)
-        assert reconstructed.run_id == original.run_id
-        assert reconstructed.success is True
+    def test_metadata_must_be_json_safe(self):
+        with pytest.raises(ValidationError, match="JSON-safe"):
+            ModelRunSuccess(
+                run_id="run-1",
+                backend_used="local",
+                output_dir="results/run-1",
+                timing=timing(),
+                artifacts=[],
+                expected_outputs=[],
+                missing_outputs=[],
+                metadata={"bad": object()},
+            )
 
 
 class TestPipelineResult:
-    """Test PipelineResult discriminated union."""
-
-    def test_pipeline_success(self):
-        """Test PipelineSuccess with nested postprocess results."""
-        postprocess_result = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-        )
-
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(minutes=5)
-        timing = TimingInfo(start_time=start, end_time=end)
-
+    def test_success_requires_exact_stage_sequence_and_nested_success(self):
         result = PipelineSuccess(
-            run_id="test-123",
-            stages_completed=[
-                PipelineStage.GENERATE,
-                PipelineStage.RUN,
-                PipelineStage.POSTPROCESS,
+            run_id="run-1",
+            stages_completed=list(PipelineStage),
+            backend="local",
+            processor="processor",
+            staging_dir="staging/run-1",
+            output_dir="results/run-1",
+            postprocess_results=post_success(),
+            timing=timing(5),
+            stage_timings=[
+                StageTiming(stage=stage, timing=timing(1)) for stage in PipelineStage
             ],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            staging_dir="/staging",
-            output_dir="/output",
-            postprocess_results=postprocess_result,
-            timing=timing,
         )
+        restored = TypeAdapter(PipelineResult).validate_python(result.model_dump(mode="json"))
+        assert isinstance(restored, PipelineSuccess)
+        assert restored.stages_completed == list(PipelineStage)
 
-        assert result.success is True
-        assert len(result.stages_completed) == 3
-        assert PipelineStage.POSTPROCESS in result.stages_completed
-        assert result.postprocess_results.validated is True
-
-    def test_pipeline_failure_at_run_stage(self):
-        """Test PipelineFailure when run stage fails."""
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(seconds=30)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        result = PipelineFailure(
-            run_id="test-123",
-            stages_completed=[PipelineStage.GENERATE],
-            backend="DockerRunBackend",
-            processor="NoopPostprocessor",
-            failed_stage=PipelineStage.RUN,
-            error="Docker container failed",
-            timing=timing,
-        )
-
-        assert result.success is False
-        assert result.failed_stage == PipelineStage.RUN
-        assert PipelineStage.RUN not in result.stages_completed
-        assert result.postprocess_results is None
-
-    def test_pipeline_failure_at_postprocess_stage(self):
-        """Test PipelineFailure when postprocess stage fails."""
-        postprocess_failure = PostprocessFailure(
-            run_id="test-123",
-            error="Validation failed",
-        )
-
-        result = PipelineFailure(
-            run_id="test-123",
-            stages_completed=[PipelineStage.GENERATE, PipelineStage.RUN],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            failed_stage=PipelineStage.POSTPROCESS,
-            error="Postprocessing failed",
-            postprocess_results=postprocess_failure,
-        )
-
-        assert result.success is False
-        assert result.failed_stage == PipelineStage.POSTPROCESS
-        assert result.postprocess_results is not None
-        assert result.postprocess_results.error == "Validation failed"
-
-    def test_pipeline_cleanup_tracking(self):
-        """Test pipeline tracks cleanup status."""
-        result = PipelineFailure(
-            run_id="test-123",
-            stages_completed=[],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            failed_stage=PipelineStage.GENERATE,
-            error="Template generation failed",
-            cleaned_up=True,
-        )
-
-        assert result.cleaned_up is True
-
-    def test_pipeline_stages_enum_serialization(self):
-        """Test PipelineStage enum serializes correctly."""
-        result = PipelineSuccess(
-            run_id="test-123",
-            stages_completed=[PipelineStage.GENERATE, PipelineStage.RUN],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            staging_dir="/staging",
-            output_dir="/output",
-            postprocess_results=PostprocessSuccess(
-                run_id="test-123",
-                output_dir="/output",
-                validated=False,
-            ),
-            timing=TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            ),
-        )
-
-        data = result.model_dump()
-        assert data["stages_completed"] == ["generate", "run"]
-
-    def test_nested_postprocess_artifact_access(self):
-        """Test accessing artifacts through nested postprocess results."""
-        artifacts = [
-            Artifact(path="output1.nc", artifact_type=ArtifactType.NETCDF),
-            Artifact(path="output2.nc", artifact_type=ArtifactType.NETCDF),
-        ]
-
-        postprocess_result = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            artifacts=artifacts,
-        )
-
-        pipeline_result = PipelineSuccess(
-            run_id="test-123",
-            stages_completed=[
-                PipelineStage.GENERATE,
-                PipelineStage.RUN,
-                PipelineStage.POSTPROCESS,
-            ],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            staging_dir="/staging",
-            output_dir="/output",
-            postprocess_results=postprocess_result,
-            timing=TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            ),
-        )
-
-        # Access artifacts through nesting
-        assert len(pipeline_result.postprocess_results.artifacts) == 2
-
-
-class TestModelRunResult:
-    """Test ModelRunResult schema."""
-
-    def test_successful_run(self):
-        """Test ModelRunResult for successful execution."""
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(minutes=2)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        result = ModelRunResult(
-            success=True,
-            run_id="test-123",
-            backend_used="LocalRunBackend",
-            output_dir="/output",
-            timing=timing,
-        )
-
-        assert result.success is True
-        assert result.backend_used == "LocalRunBackend"
-        assert result.error is None
-
-    def test_failed_run(self):
-        """Test ModelRunResult for failed execution."""
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(seconds=10)
-        timing = TimingInfo(start_time=start, end_time=end)
-
-        result = ModelRunResult(
-            success=False,
-            run_id="test-123",
-            backend_used="DockerRunBackend",
-            output_dir="/output",
-            timing=timing,
-            error="Container failed to start",
-        )
-
-        assert result.success is False
-        assert result.error == "Container failed to start"
-
-    def test_run_with_metadata(self):
-        """Test ModelRunResult with backend metadata."""
-        result = ModelRunResult(
-            success=True,
-            run_id="test-123",
-            backend_used="SlurmRunBackend",
-            output_dir="/output",
-            timing=TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            ),
-            metadata={
-                "job_id": "12345",
-                "partition": "compute",
-                "nodes": 2,
-            },
-        )
-
-        assert result.metadata["job_id"] == "12345"
-        assert result.metadata["nodes"] == 2
-
-    def test_artifacts_default_empty(self):
-        """Test ModelRunResult artifacts defaults to empty list."""
-        result = ModelRunResult(
-            success=True,
-            run_id="test-123",
-            backend_used="LocalRunBackend",
-            output_dir="/output",
-            timing=TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            ),
-        )
-
-        assert result.artifacts == []
-
-
-class TestValidation:
-    """Test validation errors for invalid data."""
-
-    def test_postprocess_success_requires_run_id(self):
-        """Test PostprocessSuccess requires run_id."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
-            PostprocessSuccess(
-                output_dir="/output",
-                validated=True,
-                # Missing run_id
+    @pytest.mark.parametrize(
+        ("failed_stage", "stages_completed"),
+        [
+            (PipelineStage.GENERATE, []),
+            (PipelineStage.RUN, [PipelineStage.GENERATE]),
+            (PipelineStage.POSTPROCESS, [PipelineStage.GENERATE, PipelineStage.RUN]),
+        ],
+    )
+    def test_failure_requires_strict_successful_prefix(self, failed_stage, stages_completed):
+        kwargs = {
+            "run_id": "run-1",
+            "stages_completed": stages_completed,
+            "backend": "local",
+            "processor": "processor",
+            "failed_stage": failed_stage,
+            "error": "stage failed",
+            "timing": timing(),
+            "stage_timings": [],
+            "cleaned_up": False,
+        }
+        if failed_stage is PipelineStage.POSTPROCESS:
+            kwargs["postprocess_results"] = PostprocessFailure(
+                run_id="run-1",
+                error="postprocess failed",
+                timing=timing(),
+                artifacts=[],
+                expected_outputs=[],
+                missing_outputs=[],
             )
+        result = PipelineFailure(**kwargs)
+        assert failed_stage not in result.stages_completed
 
-    def test_timing_requires_both_times(self):
-        """Test TimingInfo requires both start and end times."""
-        with pytest.raises(Exception):
-            TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                # Missing end_time
-            )
-
-    def test_pipeline_failure_requires_failed_stage(self):
-        """Test PipelineFailure requires failed_stage."""
-        with pytest.raises(Exception):
+    def test_pipeline_rejects_bad_prefix(self):
+        with pytest.raises(ValidationError, match="successful prefix"):
             PipelineFailure(
-                run_id="test-123",
-                stages_completed=[],
-                backend="LocalRunBackend",
-                processor="NoopPostprocessor",
-                error="Some error",
-                # Missing failed_stage
-            )
-
-    def test_artifact_requires_path(self):
-        """Test Artifact requires path field."""
-        with pytest.raises(Exception):
-            Artifact(
-                artifact_type=ArtifactType.NETCDF,
-                # Missing path
+                run_id="run-1",
+                stages_completed=[PipelineStage.RUN],
+                backend="local",
+                processor="processor",
+                failed_stage=PipelineStage.RUN,
+                error="failed",
+                timing=timing(),
+                stage_timings=[],
+                cleaned_up=False,
             )
 
 
-class TestTypeNarrowing:
-    """Test discriminator enables type narrowing."""
-
-    def test_postprocess_type_narrowing_success(self):
-        """Test type narrowing with success=True."""
-        result: PostprocessResult = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
+class TestEnvelopeCoherence:
+    def test_matching_envelopes_round_trip(self):
+        payload = run_success()
+        envelope = RunResultSidecar(
+            run_id="run-1", status="success", success=True, payload=payload
         )
+        restored = RunResultSidecar.model_validate_json(envelope.model_dump_json())
+        assert restored.schema_version == 2
+        assert restored.payload.run_id == restored.run_id
+        assert restored.payload.timing.duration_seconds == 2.25
 
-        # Type narrowing based on success field
-        if result.success:
-            # Type checker knows this is PostprocessSuccess
-            assert result.output_dir == "/output"
-            assert result.validated is True
-        else:
-            # This branch shouldn't execute
-            pytest.fail("Should not reach here")
+    def test_mismatched_run_id_success_status_and_payload_family_rejected(self):
+        raw = RunResultSidecar(
+            run_id="run-1", status="success", success=True, payload=run_success()
+        ).model_dump(mode="json")
+        raw["run_id"] = "run-other"
+        with pytest.raises(ValidationError, match="run_id"):
+            RunResultSidecar.model_validate(raw)
 
-    def test_postprocess_type_narrowing_failure(self):
-        """Test type narrowing with success=False."""
-        result: PostprocessResult = PostprocessFailure(
-            run_id="test-123",
-            error="Something went wrong",
+        raw = RunResultSidecar(
+            run_id="run-1", status="success", success=True, payload=run_success()
+        ).model_dump(mode="json")
+        raw["payload"]["success"] = False
+        raw["payload"]["error"] = "failed"
+        with pytest.raises(ValidationError, match="success"):
+            RunResultSidecar.model_validate(raw)
+
+        with pytest.raises(ValidationError):
+            PostprocessResultSidecar(
+                run_id="run-1", status="success", success=True, payload=run_success()
+            )
+
+    def test_generate_failure_envelope_requires_matching_error(self):
+        payload = GenerateFailure(
+            run_id="run-1", error="render failed", generated_files=[], timing=timing()
         )
+        with pytest.raises(ValidationError, match="must match"):
+            GenerateResultSidecar(
+                run_id="run-1",
+                status="failed",
+                success=False,
+                error="different error",
+                payload=payload,
+            )
 
-        # Type narrowing based on success field
-        if result.success:
-            # This branch shouldn't execute
-            pytest.fail("Should not reach here")
-        else:
-            # Type checker knows this is PostprocessFailure
-            assert result.error == "Something went wrong"
-
-    def test_pipeline_type_narrowing(self):
-        """Test type narrowing for PipelineResult."""
-        failure: PipelineResult = PipelineFailure(
-            run_id="test-123",
-            stages_completed=[],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            failed_stage=PipelineStage.RUN,
-            error="Run failed",
-        )
-
-        if failure.success:
-            pytest.fail("Should not reach here")
-        else:
-            # Type narrowed to PipelineFailure
-            assert failure.failed_stage == PipelineStage.RUN
-
-
-class TestSerialization:
-    """Test serialization and deserialization."""
-
-    def test_json_serialization(self):
-        """Test all schemas can serialize to JSON."""
-        start = datetime.now(timezone.utc)
-        end = start + timedelta(seconds=30)
-
-        postprocess = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            timing=TimingInfo(start_time=start, end_time=end),
-        )
-
-        json_str = postprocess.model_dump_json()
-        assert isinstance(json_str, str)
-        data = json.loads(json_str)
-        assert data["run_id"] == "test-123"
-        assert data["success"] is True
-
-    def test_dict_serialization(self):
-        """Test all schemas can serialize to dict."""
-        pipeline = PipelineSuccess(
-            run_id="test-123",
-            stages_completed=[PipelineStage.GENERATE],
-            backend="LocalRunBackend",
-            processor="NoopPostprocessor",
-            staging_dir="/staging",
-            output_dir="/output",
-            postprocess_results=PostprocessSuccess(
-                run_id="test-123",
-                output_dir="/output",
-                validated=True,
-            ),
-            timing=TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            ),
-        )
-
-        data = pipeline.model_dump()
-        assert data["backend"] == "LocalRunBackend"
-        assert "postprocess_results" in data
-
-    def test_deserialization_from_dict(self):
-        """Test deserialization from dict preserves structure."""
-        original = PostprocessSuccess(
-            run_id="test-123",
-            output_dir="/output",
-            validated=True,
-            artifacts=[Artifact(path="file.nc", artifact_type=ArtifactType.NETCDF)],
-        )
-
-        # Serialize and deserialize
-        data = original.model_dump()
-        reconstructed = PostprocessSuccess.model_validate(data)
-
-        assert reconstructed.run_id == original.run_id
-        assert len(reconstructed.artifacts) == len(original.artifacts)
-        assert reconstructed.artifacts[0].path == "file.nc"
-
-
-class TestGenerateResult:
-    """Test GenerateResult model."""
-
-    def test_construction_success(self):
-        """Test successful GenerateResult construction."""
-        now = datetime.now(timezone.utc)
-        result = GenerateResult(
-            generated_at=now,
-            staging_dir="/path/to/staging",
-            config_file="ww3_shel.nml",
-            success=True,
-            generated_files=["ww3_shel.nml", "mod_def.ww3"],
-        )
-
-        assert result.schema_version == 1
-        assert result.generated_at == now
-        assert result.staging_dir == "/path/to/staging"
-        assert result.config_file == "ww3_shel.nml"
-        assert result.success is True
-        assert result.error is None
-        assert result.generated_files == ["ww3_shel.nml", "mod_def.ww3"]
-
-    def test_construction_failure(self):
-        """Test failed GenerateResult construction."""
-        now = datetime.now(timezone.utc)
-        result = GenerateResult(
-            generated_at=now,
-            staging_dir="/path/to/staging",
-            success=False,
-            error="Template rendering failed",
-        )
-
-        assert result.success is False
-        assert result.error == "Template rendering failed"
-        assert result.generated_files == []
-
-    def test_json_round_trip(self):
-        """Test GenerateResult JSON serialization round-trip."""
-        original = GenerateResult(
-            generated_at=datetime.now(timezone.utc),
-            staging_dir="/staging",
-            config_file="config.yaml",
-            success=True,
-            generated_files=["config.yaml", "grid.nc"],
-        )
-
-        json_str = original.model_dump_json()
-        reconstructed = GenerateResult.model_validate_json(json_str)
-
-        assert reconstructed.schema_version == original.schema_version
-        assert reconstructed.staging_dir == original.staging_dir
-        assert reconstructed.config_file == original.config_file
-        assert reconstructed.success == original.success
-        assert reconstructed.generated_files == original.generated_files
-
-    def test_missing_required_fields_raises_validation_error(self):
-        """Test missing required fields raises ValidationError."""
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError) as exc_info:
-            GenerateResult(success=True)
-
-        assert "generated_at" in str(exc_info.value)
-        assert "staging_dir" in str(exc_info.value)
-
-
-class TestGenerateResultSidecar:
-    """Test GenerateResultSidecar envelope model."""
-
-    def test_construction(self):
-        """Test GenerateResultSidecar construction."""
-        now = datetime.now(timezone.utc)
-        payload = GenerateResult(
-            generated_at=now,
-            staging_dir="/staging",
-            success=True,
-            generated_files=["file.nml"],
-        )
-
-        sidecar = GenerateResultSidecar(
-            created_at=now,
-            run_id="run-123",
-            staging_dir="/staging",
-            status="success",
-            success=True,
-            payload=payload,
-        )
-
-        assert sidecar.kind == "generate_result"
-        assert sidecar.schema_version == 2
-        assert sidecar.created_at == now
-        assert sidecar.updated_at is None
-        assert sidecar.run_id == "run-123"
-        assert sidecar.staging_dir == "/staging"
-        assert sidecar.status == "success"
-        assert sidecar.success is True
-        assert sidecar.error is None
-        assert sidecar.payload == payload
-
-    def test_json_round_trip(self):
-        """Test sidecar JSON serialization round-trip."""
-        now = datetime.now(timezone.utc)
-        payload = GenerateResult(
-            generated_at=now,
-            staging_dir="/staging",
-            success=True,
-            generated_files=["config.yaml"],
-        )
-
-        original = GenerateResultSidecar(
-            created_at=now,
-            run_id="run-456",
-            staging_dir="/staging",
-            status="success",
-            success=True,
-            payload=payload,
-        )
-
-        json_str = original.model_dump_json()
-        reconstructed = GenerateResultSidecar.model_validate_json(json_str)
-
-        assert reconstructed.kind == original.kind
-        assert reconstructed.schema_version == original.schema_version
-        assert reconstructed.run_id == original.run_id
-        assert reconstructed.status == original.status
-        assert reconstructed.success == original.success
-        assert reconstructed.payload.staging_dir == payload.staging_dir
-        assert reconstructed.payload.generated_files == payload.generated_files
-
-    def test_missing_required_fields_raises_validation_error(self):
-        """Test missing required fields raises ValidationError."""
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError) as exc_info:
-            GenerateResultSidecar(success=True, status="success")
-
-        assert "created_at" in str(exc_info.value)
-        assert "run_id" in str(exc_info.value)
-        assert "staging_dir" in str(exc_info.value)
-        assert "payload" in str(exc_info.value)
-
-
-class TestRunResultSidecar:
-    """Test RunResultSidecar envelope model."""
-
-    def test_construction(self):
-        """Test RunResultSidecar construction."""
-        now = datetime.now(timezone.utc)
-        timing = TimingInfo(start_time=now, end_time=now + timedelta(seconds=30))
-        payload = ModelRunResult(
-            success=True,
-            run_id="run-789",
-            backend_used="LocalRunBackend",
-            output_dir="/output",
-            timing=timing,
-        )
-
-        sidecar = RunResultSidecar(
-            created_at=now,
-            run_id="run-789",
-            staging_dir="/staging",
-            status="success",
-            success=True,
-            payload=payload,
-        )
-
-        assert sidecar.kind == "run_result"
-        assert sidecar.schema_version == 2
-        assert sidecar.run_id == "run-789"
-        assert sidecar.status == "success"
-        assert sidecar.success is True
-        assert sidecar.payload == payload
-
-    def test_json_serialization(self):
-        """Test sidecar JSON serialization."""
-        now = datetime.now(timezone.utc)
-        timing = TimingInfo(start_time=now, end_time=now + timedelta(seconds=45))
-        payload = ModelRunResult(
-            success=True,
-            run_id="run-abc",
-            backend_used="DockerBackend",
-            output_dir="/output",
-            timing=timing,
-            artifacts=[Artifact(path="output.nc", artifact_type=ArtifactType.NETCDF)],
-        )
-
-        sidecar = RunResultSidecar(
-            created_at=now,
-            run_id="run-abc",
-            staging_dir="/staging",
-            status="success",
-            success=True,
-            payload=payload,
-        )
-
-        json_str = sidecar.model_dump_json()
-        data = json.loads(json_str)
-
-        assert data["kind"] == "run_result"
-        assert data["schema_version"] == 2
-        assert data["run_id"] == "run-abc"
-        assert data["status"] == "success"
-        assert data["success"] is True
-        assert data["payload"]["backend_used"] == "DockerBackend"
-        assert len(data["payload"]["artifacts"]) == 1
-        assert data["payload"]["artifacts"][0]["path"] == "output.nc"
-
-
-class TestPostprocessResultSidecar:
-    """Test PostprocessResultSidecar envelope model."""
-
-    def test_construction_with_success_payload(self):
-        """Test PostprocessResultSidecar with PostprocessSuccess payload."""
-        now = datetime.now(timezone.utc)
-        payload = PostprocessSuccess(
-            run_id="run-xyz",
-            output_dir="/output",
-            validated=True,
-        )
-
+    def test_sidecar_version_and_kind_are_current(self):
+        payload = post_success()
         sidecar = PostprocessResultSidecar(
-            created_at=now,
-            run_id="run-xyz",
-            staging_dir="/staging",
-            status="success",
-            success=True,
-            payload=payload,
+            run_id="run-1", status="success", success=True, payload=payload
         )
-
-        assert sidecar.kind == "postprocess_result"
-        assert sidecar.schema_version == 1
-        assert sidecar.success is True
-        assert isinstance(sidecar.payload, PostprocessSuccess)
-
-    def test_construction_with_failure_payload(self):
-        """Test PostprocessResultSidecar with PostprocessFailure payload."""
-        now = datetime.now(timezone.utc)
-        payload = PostprocessFailure(
-            run_id="run-fail",
-            output_dir="/output",
-            error="Transfer failed",
-        )
-
-        sidecar = PostprocessResultSidecar(
-            created_at=now,
-            run_id="run-fail",
-            staging_dir="/staging",
-            status="failed",
-            success=False,
-            error="Transfer failed",
-            payload=payload,
-        )
-
-        assert sidecar.success is False
-        assert sidecar.error == "Transfer failed"
-        assert isinstance(sidecar.payload, PostprocessFailure)
-
-    def test_json_serialization(self):
-        """Test sidecar JSON serialization."""
-        now = datetime.now(timezone.utc)
-        timing = TimingInfo(start_time=now, end_time=now + timedelta(seconds=60))
-        payload = PostprocessSuccess(
-            run_id="run-pp",
-            output_dir="/output",
-            validated=True,
-            timing=timing,
-            artifacts=[Artifact(path="plot.png", artifact_type=ArtifactType.PLOT)],
-        )
-
-        sidecar = PostprocessResultSidecar(
-            created_at=now,
-            run_id="run-pp",
-            staging_dir="/staging",
-            status="success",
-            success=True,
-            payload=payload,
-        )
-
-        json_str = sidecar.model_dump_json()
-        data = json.loads(json_str)
-
+        data = json.loads(sidecar.model_dump_json())
         assert data["kind"] == "postprocess_result"
-        assert data["schema_version"] == 1
-        assert data["run_id"] == "run-pp"
-        assert data["success"] is True
-        assert data["payload"]["validated"] is True
-        assert len(data["payload"]["artifacts"]) == 1
-        assert data["payload"]["artifacts"][0]["path"] == "plot.png"
+        assert data["schema_version"] == 2

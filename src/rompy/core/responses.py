@@ -1,137 +1,112 @@
-"""Response schemas for rompy operations.
+"""Canonical, validated result schemas and sidecar envelope models.
 
-This module defines strongly-typed Pydantic response models for all major
-rompy operations, replacing dictionary returns with validated schemas.
-
-The schemas use discriminated unions with a `success` field as the discriminator,
-enabling type narrowing and type-safe access to success/failure-specific fields.
-
-Examples:
-    Basic usage with type narrowing::
-
-        from rompy.core.responses import PostprocessResult, PostprocessSuccess
-
-        result: PostprocessResult = postprocessor.process(model_run)
-
-        if result.success:
-            # Type narrowed to PostprocessSuccess
-            print(f"Generated {len(result.artifacts)} artifacts")
-            print(f"Output dir: {result.output_dir}")
-        else:
-            # Type narrowed to PostprocessFailure
-            print(f"Failed: {result.error}")
-
-    Artifact tracking::
-
-        artifacts = [
-            Artifact(
-                path="output.nc",
-                artifact_type=ArtifactType.NETCDF,
-                size_bytes=1024000,
-                description="Model output NetCDF"
-            ),
-            Artifact(
-                path="wave_height.png",
-                artifact_type=ArtifactType.PLOT,
-                size_bytes=51200
-            )
-        ]
-
-    Timing information::
-
-        from datetime import datetime, timezone
-
-        start = datetime.now(timezone.utc)
-        # ... do work ...
-        end = datetime.now(timezone.utc)
-
-        timing = TimingInfo(start_time=start, end_time=end)
-        print(f"Took {timing.duration_seconds:.2f} seconds")
+The result unions in this module are typing aliases.  Use ``TypeAdapter`` (or
+one of the concrete sidecar loaders) to deserialize a union.
 """
 
-from datetime import datetime
-from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, Union
+from __future__ import annotations
 
-from pydantic import Field, computed_field
+import json
+import math
+import re
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from pathlib import PurePosixPath
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
+
+from pydantic import Field, StrictInt, field_validator, model_validator
 
 from rompy.core.types import RompyBaseModel
 
+UTC = timezone.utc
+
+
+def _utc(value: datetime, field: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() != timedelta(0):
+        raise ValueError(f"{field} must be timezone-aware UTC")
+    return value
+
+
+def _json_safe(value: dict[str, Any]) -> dict[str, Any]:
+    try:
+        json.dumps(value, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("metadata must contain only JSON-safe values") from exc
+    return value
+
+
+def _local_path(value: str) -> str:
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError("local artifact path must be a non-empty POSIX path")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ValueError("local artifact path must be staging-relative, not absolute")
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or "://" in value:
+        raise ValueError("URI-like values must use the remote artifact variant")
+    path = PurePosixPath(value)
+    parts = path.parts
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ValueError("local artifact path must not contain traversal components")
+    normalized = path.as_posix()
+    if normalized != value:
+        raise ValueError("local artifact path must be normalized POSIX syntax")
+    return value
+
+
+def _remote_uri(value: str) -> str:
+    if not isinstance(value, str) or not value or any(ch.isspace() for ch in value):
+        raise ValueError("remote artifact URI must be a non-empty URI")
+    parsed = urlsplit(value)
+    if not parsed.scheme or parsed.scheme.lower() == "file":
+        raise ValueError("remote artifact URI must use a non-file URI scheme")
+    return value
+
 
 class NormalizedContext(RompyBaseModel):
-    """Normalized execution context for sidecar chaining.
+    """Plugin-neutral context persisted with generation/run sidecars."""
 
-    Provides a standardized contract for passing execution context between
-    pipeline stages and across plugin boundaries. All core fields are plugin-agnostic;
-    plugin-specific data should be stored in the extensions dictionary.
+    model_type: str
+    period_start: datetime
+    period_end: datetime
+    period_interval: float
+    output_dir: str
+    staging_dir: str
+    config_hash: str
+    extensions: dict[str, Any] = Field(default_factory=dict)
 
-    Attributes:
-        model_type: Model type identifier (e.g., "ww3", "swan")
-        period_start: Start of the modelling period (UTC)
-        period_end: End of the modelling period (UTC)
-        period_interval: Sampling interval for the modelling period
-        output_dir: Model output directory path
-        staging_dir: Local staging directory path
-        config_hash: SHA256 hash of generated file contents
-        extensions: Plugin-specific extension data (extensible dict)
+    _period_start_utc = field_validator("period_start")(lambda value: _utc(value, "period_start"))
+    _period_end_utc = field_validator("period_end")(lambda value: _utc(value, "period_end"))
 
-    Examples:
-        ::
+    @field_validator("period_interval", mode="before")
+    @classmethod
+    def numeric_interval(cls, value: Any) -> float:
+        if isinstance(value, (str, bool)) or not isinstance(value, (int, float)):
+            raise ValueError("period_interval must be numeric seconds")  # noqa: TRY004
+        try:
+            numeric = float(value)
+        except OverflowError as exc:
+            raise ValueError("period_interval must be finite numeric seconds") from exc
+        if not math.isfinite(numeric):
+            raise ValueError("period_interval must be finite numeric seconds")
+        if numeric < 0:
+            raise ValueError("period_interval must be nonnegative")
+        return numeric
 
-            from datetime import datetime, timezone
-
-            context = NormalizedContext(
-                model_type="ww3",
-                period_start=datetime(2024, 1, 1, tzinfo=timezone.utc),
-                period_end=datetime(2024, 1, 2, tzinfo=timezone.utc),
-                period_interval="1h",
-                output_dir="/path/to/output",
-                staging_dir="/path/to/staging",
-                config_hash="abc123...",
-                extensions={"ww3_version": "6.07.1"}
-            )
-    """
-
-    model_type: str = Field(..., description="Model type identifier")
-    period_start: datetime = Field(..., description="Start of the modelling period")
-    period_end: datetime = Field(..., description="End of the modelling period")
-    period_interval: str = Field(
-        ..., description="Sampling interval for the modelling period"
-    )
-    output_dir: str = Field(..., description="Model output directory")
-    staging_dir: str = Field(..., description="Local staging directory")
-    config_hash: str = Field(..., description="SHA256 hash of generated file contents")
-    extensions: Dict[str, Any] = Field(
-        default_factory=dict, description="Plugin-specific extension data"
-    )
+    @model_validator(mode="after")
+    def ordered_period(self) -> NormalizedContext:
+        if self.period_end < self.period_start:
+            raise ValueError("period_end must be greater than or equal to period_start")
+        return self
 
 
 class PipelineStage(str, Enum):
-    """Pipeline execution stages.
-
-    Attributes:
-        GENERATE: Template generation stage
-        RUN: Model execution stage
-        POSTPROCESS: Output postprocessing stage
-    """
-
     GENERATE = "generate"
     RUN = "run"
     POSTPROCESS = "postprocess"
 
 
 class ArtifactType(str, Enum):
-    """Types of artifacts generated during postprocessing.
-
-    Attributes:
-        YAML: YAML configuration or metadata files
-        NETCDF: NetCDF data files (model output)
-        PLOT: Plot/visualization files (PNG, PDF, SVG, etc.)
-        TEXT: Text files (logs, reports, etc.)
-        RESTART: Restart/checkpoint files for continuing a run
-        OTHER: Other file types
-    """
-
     YAML = "yaml"
     NETCDF = "netcdf"
     PLOT = "plot"
@@ -140,552 +115,322 @@ class ArtifactType(str, Enum):
     OTHER = "other"
 
 
-class Artifact(RompyBaseModel):
-    """Represents a file artifact generated during processing.
+class LocalArtifact(RompyBaseModel):
+    kind: Literal["local"] = "local"
+    path: str
+    artifact_type: ArtifactType | None = None
+    size_bytes: int | None = None
+    description: str | None = None
+    date: str | None = None
+    reason: str | None = None
 
-    Attributes:
-        path: Absolute or relative path to artifact
-        artifact_type: Type of artifact (yaml, netcdf, plot, etc.)
-        size_bytes: File size in bytes (if available)
-        description: Human-readable description of the artifact
-    """
+    _valid_path = field_validator("path")(_local_path)
 
-    path: str = Field(..., description="Absolute or relative path to artifact")
-    artifact_type: Optional[ArtifactType] = Field(
-        None, description="Type of artifact (yaml, netcdf, plot, etc.)"
-    )
-    size_bytes: Optional[int] = Field(None, description="File size in bytes")
-    description: Optional[str] = Field(None, description="Human-readable description")
-    date: Optional[str] = Field(
-        None, description="Artifact timestamp in ISO 8601 format"
-    )
+
+class RemoteArtifact(RompyBaseModel):
+    kind: Literal["remote"] = "remote"
+    uri: str
+    artifact_type: ArtifactType | None = None
+    size_bytes: int | None = None
+    description: str | None = None
+    date: str | None = None
+    reason: str | None = None
+
+    _valid_uri = field_validator("uri")(_remote_uri)
+
+
+# Artifact is retained as the local concrete spelling used by existing core
+# callers.  Canonical collections use the explicit local/remote union.
+Artifact = LocalArtifact
+ArtifactIdentity = Annotated[
+    LocalArtifact | RemoteArtifact, Field(discriminator="kind")
+]
+# Descriptive aliases make the two wire variants discoverable to consumers.
+LocalArtifactIdentity = LocalArtifact
+RemoteArtifactIdentity = RemoteArtifact
+OutputEvidence = ArtifactIdentity
+ExpectedOutput = ArtifactIdentity
+MissingOutput = ArtifactIdentity
 
 
 class TimingInfo(RompyBaseModel):
-    """Execution timing information.
+    start_time: datetime
+    end_time: datetime
+    duration_seconds: float | None = None
 
-    Captures start and end times (UTC) with a computed duration.
-
-    Attributes:
-        start_time: Operation start time (UTC)
-        end_time: Operation end time (UTC)
-        duration_seconds: Computed duration in seconds (read-only)
-
-    Examples:
-        ::
-
-            from datetime import datetime, timezone
-
-            start = datetime.now(timezone.utc)
-            # ... do work ...
-            end = datetime.now(timezone.utc)
-
-            timing = TimingInfo(start_time=start, end_time=end)
-            print(f"Duration: {timing.duration_seconds:.2f}s")
-    """
-
-    start_time: datetime = Field(..., description="Operation start time (UTC)")
-    end_time: datetime = Field(..., description="Operation end time (UTC)")
-
-    @computed_field
-    @property
-    def duration_seconds(self) -> float:
-        """Computed duration in seconds."""
-        return (self.end_time - self.start_time).total_seconds()
-
-
-class PostprocessSuccess(RompyBaseModel):
-    """Successful postprocessing result.
-
-    Returned when postprocessing completes successfully, including validation
-    of outputs and artifact tracking.
-
-    Attributes:
-        success: Always True for success cases
-        run_id: Run identifier (from ModelRun)
-        output_dir: Path to output directory
-        validated: Whether output validation was performed
-        file_count: Number of output files (if available)
-        artifacts: List of generated artifacts with type classification
-        message: Optional status message
-        metadata: Processor-specific metadata (extensible dict)
-        timing: Execution timing information
-    """
-
-    success: Literal[True] = Field(True, description="Always True for success")
-    run_id: str = Field(..., description="Run identifier")
-    output_dir: str = Field(..., description="Path to output directory")
-    validated: bool = Field(..., description="Whether output validation was performed")
-    file_count: Optional[int] = Field(None, description="Number of output files")
-    artifacts: List[Artifact] = Field(
-        default_factory=list,
-        description="List of generated artifacts (YAML, NetCDF, plots, etc.)",
+    _start_utc = field_validator("start_time")(
+        lambda value: _utc(value, "start_time")
     )
-    message: Optional[str] = Field(None, description="Status message")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Processor-specific metadata"
-    )
-    timing: Optional[TimingInfo] = Field(None, description="Execution timing")
+    _end_utc = field_validator("end_time")(lambda value: _utc(value, "end_time"))
+
+    @field_validator("duration_seconds", mode="before")
+    @classmethod
+    def numeric_duration(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        if isinstance(value, (str, bool)) or not isinstance(value, (int, float)):
+            raise ValueError("duration_seconds must be numeric seconds")  # noqa: TRY004
+        try:
+            numeric = float(value)
+        except OverflowError as exc:
+            raise ValueError("duration_seconds must be finite numeric seconds") from exc
+        if not math.isfinite(numeric):
+            raise ValueError("duration_seconds must be finite numeric seconds")
+        return numeric
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> TimingInfo:
+        if self.end_time < self.start_time:
+            raise ValueError("end_time must be greater than or equal to start_time")
+        expected = (self.end_time - self.start_time).total_seconds()
+        if self.duration_seconds is not None and self.duration_seconds != expected:
+            raise ValueError(
+                f"duration_seconds {self.duration_seconds} does not match timestamps ({expected})"
+            )
+        object.__setattr__(self, "duration_seconds", expected)
+        return self
 
 
-class PostprocessFailure(RompyBaseModel):
-    """Failed postprocessing result.
+class PersistenceDiagnostic(RompyBaseModel):
+    status: Literal["failed"] = "failed"
+    sidecar_kind: str
+    sidecar_path: str
+    error: str
+    primary_error: str | None = None
 
-    Returned when postprocessing fails, including partial artifacts that may
-    have been generated before the failure.
 
-    Attributes:
-        success: Always False for failure cases
-        run_id: Run identifier (from ModelRun)
-        error: Error message describing the failure
-        output_dir: Path to output directory if located
-        artifacts: Partial artifacts generated before failure
-        message: Additional context about the failure
-        metadata: Processor-specific metadata (extensible dict)
-        timing: Execution timing information (if available)
-    """
+class _ResultBase(RompyBaseModel):
+    run_id: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    persistence_diagnostic: PersistenceDiagnostic | None = None
 
-    success: Literal[False] = Field(False, description="Always False for failure")
-    run_id: str = Field(..., description="Run identifier")
-    error: str = Field(..., description="Error message")
-    output_dir: Optional[str] = Field(
-        None, description="Path to output directory if located"
-    )
-    artifacts: List[Artifact] = Field(
-        default_factory=list, description="Partial artifacts generated before failure"
-    )
-    message: Optional[str] = Field(None, description="Additional context")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Processor-specific metadata"
-    )
-    timing: Optional[TimingInfo] = Field(None, description="Execution timing")
+    _metadata_json = field_validator("metadata")(_json_safe)
+
+    @model_validator(mode="after")
+    def persisted_success_is_impossible(self):
+        if getattr(self, "success", False) and self.persistence_diagnostic is not None:
+            raise ValueError("successful result cannot carry a persistence diagnostic")
+        return self
+
+
+class GenerateSuccess(_ResultBase):
+    success: Literal[True] = True
+    staging_dir: str
+    generated_files: list[str]
+    timing: TimingInfo
+    config_file: str | None = None
+
+
+class GenerateFailure(_ResultBase):
+    success: Literal[False] = False
+    error: str
+    generated_files: list[str]
+    timing: TimingInfo
+    staging_dir: str | None = None
+    config_file: str | None = None
+
+
+GenerateResult = Annotated[
+    GenerateSuccess | GenerateFailure, Field(discriminator="success")
+]
+
+
+class _ExecutionEvidence(_ResultBase):
+    artifacts: list[ArtifactIdentity]
+    expected_outputs: list[ArtifactIdentity]
+    missing_outputs: list[ArtifactIdentity]
+
+
+class ModelRunSuccess(_ExecutionEvidence):
+    success: Literal[True] = True
+    backend_used: str
+    output_dir: str
+    timing: TimingInfo
+    workspace_dir: str | None = None
+    message: str | None = None
+
+
+class ModelRunFailure(_ExecutionEvidence):
+    success: Literal[False] = False
+    backend_used: str
+    error: str
+    timing: TimingInfo
+    output_dir: str | None = None
+    workspace_dir: str | None = None
+    message: str | None = None
+
+
+ModelRunResult = Annotated[
+    ModelRunSuccess | ModelRunFailure, Field(discriminator="success")
+]
+
+
+class PostprocessSuccess(_ExecutionEvidence):
+    success: Literal[True] = True
+    output_dir: str
+    validated: bool
+    timing: TimingInfo
+    file_count: int | None = None
+    message: str | None = None
+
+
+class PostprocessFailure(_ExecutionEvidence):
+    success: Literal[False] = False
+    error: str
+    timing: TimingInfo
+    output_dir: str | None = None
+    message: str | None = None
 
 
 PostprocessResult = Annotated[
-    Union[PostprocessSuccess, PostprocessFailure], Field(discriminator="success")
+    PostprocessSuccess | PostprocessFailure, Field(discriminator="success")
 ]
-"""Discriminated union of PostprocessSuccess or PostprocessFailure.
-
-The `success` field acts as a discriminator, enabling type narrowing:
-
-Examples:
-    ::
-    
-        result: PostprocessResult = postprocessor.process(model_run)
-        
-        if result.success:
-            # Type checker knows this is PostprocessSuccess
-            print(result.output_dir)  # OK
-            print(result.artifacts)    # OK
-        else:
-            # Type checker knows this is PostprocessFailure
-            print(result.error)        # OK
-"""
 
 
-class PipelineSuccess(RompyBaseModel):
-    """Fully successful pipeline execution.
-
-    Returned when all pipeline stages (generate → run → postprocess) complete
-    successfully.
-
-    Attributes:
-        success: Always True for success cases
-        run_id: Run identifier (from ModelRun)
-        stages_completed: List of all completed stages (should be [GENERATE, RUN, POSTPROCESS])
-        backend: Backend used for execution
-        processor: Processor used for postprocessing
-        staging_dir: Path to staging directory
-        workspace_dir: Workspace directory (backend-specific)
-        output_dir: Final output directory
-        postprocess_results: Nested postprocessing results (PostprocessSuccess)
-        timing: Total pipeline execution time
-        message: Status message (default: "Pipeline completed successfully")
-        metadata: Pipeline-specific metadata (extensible dict)
-    """
-
-    success: Literal[True] = Field(True, description="Always True for success")
-    run_id: str = Field(..., description="Run identifier")
-    stages_completed: List[PipelineStage] = Field(
-        ..., description="All stages completed"
-    )
-    backend: str = Field(..., description="Backend used for execution")
-    processor: str = Field(..., description="Processor used for postprocessing")
-    staging_dir: str = Field(..., description="Path to staging directory")
-    workspace_dir: Optional[str] = Field(None, description="Workspace directory")
-    output_dir: str = Field(..., description="Final output directory")
-    postprocess_results: PostprocessSuccess = Field(
-        ..., description="Postprocessing results"
-    )
-    timing: TimingInfo = Field(..., description="Total pipeline execution time")
-    message: Optional[str] = Field(
-        "Pipeline completed successfully", description="Status message"
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Pipeline-specific metadata"
-    )
+class StageTiming(RompyBaseModel):
+    stage: PipelineStage
+    timing: TimingInfo
 
 
-class PipelineFailure(RompyBaseModel):
-    """Failed pipeline execution.
+class PipelineSuccess(_ResultBase):
+    success: Literal[True] = True
+    stages_completed: list[PipelineStage]
+    backend: str
+    processor: str
+    staging_dir: str
+    output_dir: str
+    postprocess_results: PostprocessSuccess
+    timing: TimingInfo
+    stage_timings: list[StageTiming]
+    workspace_dir: str | None = None
+    message: str | None = None
 
-    Returned when any pipeline stage fails. Tracks which stage failed and which
-    stages completed before the failure.
+    @model_validator(mode="after")
+    def validate_success_stages(self):
+        if self.stages_completed != list(PipelineStage):
+            raise ValueError("successful pipeline must complete generate, run, postprocess")
+        if self.postprocess_results.run_id != self.run_id:
+            raise ValueError("pipeline and postprocess run_id must match")
+        return self
 
-    Attributes:
-        success: Always False for failure cases
-        run_id: Run identifier (from ModelRun)
-        stages_completed: Stages completed before failure
-        backend: Backend used for execution
-        processor: Processor used (or intended for) postprocessing
-        failed_stage: Stage where failure occurred
-        error: Error message describing the failure
-        message: Additional context about the failure
-        staging_dir: Staging directory if generated
-        workspace_dir: Workspace directory if created
-        output_dir: Output directory if any output generated
-        postprocess_results: Postprocess failure details (if failed at postprocess stage)
-        timing: Execution time until failure
-        cleaned_up: Whether output was cleaned up after failure
-        metadata: Pipeline-specific metadata (extensible dict)
-    """
 
-    success: Literal[False] = Field(False, description="Always False for failure")
-    run_id: str = Field(..., description="Run identifier")
-    stages_completed: List[PipelineStage] = Field(
-        ..., description="Stages completed before failure"
-    )
-    backend: str = Field(..., description="Backend used for execution")
-    processor: str = Field(..., description="Processor used for postprocessing")
-    failed_stage: PipelineStage = Field(..., description="Stage where failure occurred")
-    error: str = Field(..., description="Error message")
-    message: Optional[str] = Field(None, description="Additional context")
-    staging_dir: Optional[str] = Field(
-        None, description="Staging directory if generated"
-    )
-    workspace_dir: Optional[str] = Field(
-        None, description="Workspace directory if created"
-    )
-    output_dir: Optional[str] = Field(
-        None, description="Output directory if any output generated"
-    )
-    postprocess_results: Optional[PostprocessFailure] = Field(
-        None, description="Postprocess failure details"
-    )
-    timing: Optional[TimingInfo] = Field(
-        None, description="Execution time until failure"
-    )
-    cleaned_up: bool = Field(
-        False, description="Whether output was cleaned up after failure"
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Pipeline-specific metadata"
-    )
+class PipelineFailure(_ResultBase):
+    success: Literal[False] = False
+    stages_completed: list[PipelineStage]
+    backend: str
+    processor: str
+    failed_stage: PipelineStage
+    error: str
+    timing: TimingInfo
+    stage_timings: list[StageTiming]
+    cleaned_up: bool
+    staging_dir: str | None = None
+    workspace_dir: str | None = None
+    output_dir: str | None = None
+    postprocess_results: PostprocessFailure | None = None
+    message: str | None = None
+
+    @model_validator(mode="after")
+    def validate_failure_stages(self):
+        stages = list(PipelineStage)
+        expected = stages[: stages.index(self.failed_stage)]
+        if self.stages_completed != expected:
+            raise ValueError(
+                f"stages_completed must be the successful prefix before {self.failed_stage.value}"
+            )
+        if self.failed_stage is PipelineStage.POSTPROCESS:
+            if self.postprocess_results is None:
+                raise ValueError("postprocess failure must retain postprocess_results")
+            if self.postprocess_results.run_id != self.run_id:
+                raise ValueError("pipeline and postprocess run_id must match")
+        elif self.postprocess_results is not None:
+            raise ValueError("postprocess_results is only valid for postprocess failure")
+        return self
 
 
 PipelineResult = Annotated[
-    Union[PipelineSuccess, PipelineFailure], Field(discriminator="success")
+    PipelineSuccess | PipelineFailure, Field(discriminator="success")
 ]
-"""Discriminated union of PipelineSuccess or PipelineFailure.
-
-The `success` field acts as a discriminator, enabling type narrowing:
-
-Examples:
-    ::
-    
-        result: PipelineResult = model_run.pipeline()
-        
-        if result.success:
-            # Type checker knows this is PipelineSuccess
-            print(f"Stages: {[s.value for s in result.stages_completed]}")
-            print(f"Output: {result.output_dir}")
-            print(f"Artifacts: {len(result.postprocess_results.artifacts)}")
-        else:
-            # Type checker knows this is PipelineFailure
-            print(f"Failed at stage: {result.failed_stage.value}")
-            print(f"Error: {result.error}")
-            if result.postprocess_results:
-                print(f"Postprocess error: {result.postprocess_results.error}")
-"""
 
 
-class ModelRunResult(RompyBaseModel):
-    """Result from model execution via a backend.
+class _SidecarBase(RompyBaseModel):
+    schema_version: StrictInt = 2
+    run_id: str
+    status: Literal["success", "failed"]
+    success: bool
+    error: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    staging_dir: str | None = None
+    normalized_context: NormalizedContext | None = None
 
-    Current concrete result returned by `ModelRun.run()` (without
-    postprocessing).  This model records the operation outcome and execution
-    context; `success` is a plain boolean and `error` is optional on this
-    current implementation.
+    @field_validator("success", mode="before")
+    @classmethod
+    def strict_success(cls, value: Any) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError("success must be a boolean")  # noqa: TRY004
+        return value
 
-    Attributes:
-        success: Whether execution succeeded
-        run_id: Run identifier (from ModelRun)
-        backend_used: Backend class name
-        output_dir: Output directory path
-        workspace_dir: Workspace directory (optional)
-        timing: Execution timing information
-        artifacts: Observed output artifacts discovered after execution
-        error: Error message when available
-        message: Additional context (optional)
-        metadata: Backend-specific metadata (optional)
-
-    Examples:
-        ::
-
-            result = model_run.run(backend_config)
-
-            if result.success:
-                print(f"Run completed in {result.timing.duration_seconds:.1f}s")
-                print(f"Output: {result.output_dir}")
-            else:
-                print(f"Run failed: {result.error}")
-
-    The approved future result contract, including discriminated variants,
-    expected/missing output evidence, and persistence diagnostics, is documented
-    in the issue #3 OpenSpec change for follow-up implementation in #4.  This
-    docstring describes only fields present on this concrete class today.
-    """
-
-    success: bool = Field(..., description="Whether execution succeeded")
-    run_id: str = Field(..., description="Run identifier")
-    backend_used: str = Field(..., description="Backend class name")
-    output_dir: str = Field(..., description="Output directory path")
-    workspace_dir: Optional[str] = Field(None, description="Workspace directory")
-    timing: TimingInfo = Field(..., description="Execution timing")
-    artifacts: List[Artifact] = Field(
-        default_factory=list,
-        description="Output artifacts discovered after execution",
-    )
-    error: Optional[str] = Field(None, description="Error message if success=False")
-    message: Optional[str] = Field(None, description="Additional context")
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict, description="Backend-specific metadata"
-    )
-
-
-class GenerateResult(RompyBaseModel):
-    """Result from template generation operation.
-
-    Returned by generate operations to provide structured information about
-    configuration file generation.
-
-    Attributes:
-        schema_version: Schema version for compatibility tracking
-        generated_at: Timestamp when generation completed (UTC)
-        staging_dir: Local directory where files were generated
-        config_file: Path to the generated configuration file
-        success: Whether generation succeeded
-        error: Error message if success=False
-        generated_files: List of paths to all generated files
-
-    Examples:
-        ::
-
-            result = GenerateResult(
-                generated_at=datetime.now(timezone.utc),
-                staging_dir="/path/to/staging",
-                config_file="ww3_shel.nml",
-                success=True,
-                generated_files=["ww3_shel.nml", "mod_def.ww3"]
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def current_version(cls, value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value != 2:
+            raise ValueError(
+                f"Unsupported schema_version {value!r}; regenerate a canonical schema_version 2 sidecar"
             )
+        return value
 
-            if result.success:
-                print(f"Generated {len(result.generated_files)} files in {result.staging_dir}")
-            else:
-                print(f"Generation failed: {result.error}")
-    """
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def envelope_timestamp(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else _utc(value, "sidecar timestamp")
 
-    schema_version: int = Field(
-        default=1, description="Schema version for compatibility tracking"
-    )
-    generated_at: datetime = Field(
-        ..., description="Timestamp when generation completed (UTC)"
-    )
-    staging_dir: str = Field(
-        ..., description="Local directory where files were generated"
-    )
-    config_file: Optional[str] = Field(
-        None, description="Path to the generated configuration file"
-    )
-    success: bool = Field(..., description="Whether generation succeeded")
-    error: Optional[str] = Field(None, description="Error message if success=False")
-    generated_files: List[str] = Field(
-        default_factory=list, description="List of paths to all generated files"
-    )
-
-
-class GenerateResultSidecar(RompyBaseModel):
-    """Sidecar envelope for GenerateResult persistence.
-
-    Wraps GenerateResult with metadata for sidecar file writing (generate_result.json).
-
-    Attributes:
-        kind: Discriminator for sidecar type
-        schema_version: Schema version for compatibility tracking
-        created_at: Timestamp when sidecar was created (UTC)
-        updated_at: Timestamp when sidecar was last updated (UTC)
-        run_id: Run identifier
-        staging_dir: Local staging directory path
-        status: Current operation status
-        success: Whether operation succeeded
-        error: Error message if success=False
-        payload: The actual GenerateResult data
-
-    Examples:
-        ::
-
-            result = GenerateResult(...)
-            sidecar = GenerateResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="run-123",
-                staging_dir="/path/to/staging",
-                status="success",
-                success=True,
-                payload=result
+    def _coherent(self, payload: Any, expected_kind: str) -> None:
+        if self.run_id != payload.run_id:
+            raise ValueError(
+                f"envelope/payload run_id mismatch: {self.run_id!r} != {payload.run_id!r}"
             )
-
-            # Serialize to JSON for file writing
-            json_str = sidecar.model_dump_json(indent=2)
-    """
-
-    kind: Literal["generate_result"] = Field(
-        default="generate_result", description="Discriminator for sidecar type"
-    )
-    schema_version: int = Field(
-        default=2, description="Schema version for compatibility tracking"
-    )
-    created_at: datetime = Field(
-        ..., description="Timestamp when sidecar was created (UTC)"
-    )
-    updated_at: Optional[datetime] = Field(
-        None, description="Timestamp when sidecar was last updated (UTC)"
-    )
-    run_id: str = Field(..., description="Run identifier")
-    staging_dir: str = Field(..., description="Local staging directory path")
-    status: Literal["running", "success", "failed"] = Field(
-        ..., description="Current operation status"
-    )
-    success: bool = Field(..., description="Whether operation succeeded")
-    error: Optional[str] = Field(None, description="Error message if success=False")
-    normalized_context: Optional[NormalizedContext] = Field(
-        None, description="Normalized execution context for sidecar chaining"
-    )
-    payload: GenerateResult = Field(..., description="The actual GenerateResult data")
-
-
-class RunResultSidecar(RompyBaseModel):
-    """Sidecar envelope for ModelRunResult persistence.
-
-    Wraps ModelRunResult with metadata for sidecar file writing (run_result.json).
-
-    Attributes:
-        kind: Discriminator for sidecar type
-        schema_version: Schema version for compatibility tracking
-        created_at: Timestamp when sidecar was created (UTC)
-        updated_at: Timestamp when sidecar was last updated (UTC)
-        run_id: Run identifier
-        staging_dir: Local staging directory path
-        status: Current operation status
-        success: Whether operation succeeded
-        error: Error message if success=False
-        payload: The actual ModelRunResult data
-
-    Examples:
-        ::
-
-            result = ModelRunResult(...)
-            sidecar = RunResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="run-123",
-                staging_dir="/path/to/staging",
-                status="success",
-                success=True,
-                payload=result
+        if self.success != payload.success:
+            raise ValueError(
+                f"envelope/payload success mismatch: {self.success!r} != {payload.success!r}"
             )
-
-            # Serialize to JSON for file writing
-            json_str = sidecar.model_dump_json(indent=2)
-    """
-
-    kind: Literal["run_result"] = Field(
-        default="run_result", description="Discriminator for sidecar type"
-    )
-    schema_version: int = Field(
-        default=2, description="Schema version for compatibility tracking"
-    )
-    created_at: datetime = Field(
-        ..., description="Timestamp when sidecar was created (UTC)"
-    )
-    updated_at: Optional[datetime] = Field(
-        None, description="Timestamp when sidecar was last updated (UTC)"
-    )
-    run_id: str = Field(..., description="Run identifier")
-    staging_dir: str = Field(..., description="Local staging directory path")
-    status: Literal["running", "success", "failed"] = Field(
-        ..., description="Current operation status"
-    )
-    success: bool = Field(..., description="Whether operation succeeded")
-    error: Optional[str] = Field(None, description="Error message if success=False")
-    normalized_context: Optional[NormalizedContext] = Field(
-        None, description="Normalized execution context for sidecar chaining"
-    )
-    payload: ModelRunResult = Field(..., description="The actual ModelRunResult data")
-
-
-class PostprocessResultSidecar(RompyBaseModel):
-    """Sidecar envelope for PostprocessResult persistence.
-
-    Wraps PostprocessResult (union of PostprocessSuccess/PostprocessFailure) with metadata
-    for sidecar file writing (postprocess_result.json).
-
-    Attributes:
-        kind: Discriminator for sidecar type
-        schema_version: Schema version for compatibility tracking
-        created_at: Timestamp when sidecar was created (UTC)
-        updated_at: Timestamp when sidecar was last updated (UTC)
-        run_id: Run identifier
-        staging_dir: Local staging directory path
-        status: Current operation status
-        success: Whether operation succeeded
-        error: Error message if success=False
-        payload: The actual PostprocessResult data (PostprocessSuccess or PostprocessFailure)
-
-    Examples:
-        ::
-
-            result = PostprocessSuccess(...)
-            sidecar = PostprocessResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="run-123",
-                staging_dir="/path/to/staging",
-                status="success",
-                success=True,
-                payload=result
+        expected_status = "success" if payload.success else "failed"
+        if self.status != expected_status:
+            raise ValueError(
+                f"status {self.status!r} disagrees with payload success; expected {expected_status!r}"
             )
+        payload_error = getattr(payload, "error", None)
+        if self.success and (self.error is not None or payload_error is not None):
+            raise ValueError("successful envelope/payload cannot contain an error")
+        if not self.success and (not self.error or self.error != payload_error):
+            raise ValueError("failed envelope error must match payload error")
 
-            # Serialize to JSON for file writing
-            json_str = sidecar.model_dump_json(indent=2)
-    """
 
-    kind: Literal["postprocess_result"] = Field(
-        default="postprocess_result", description="Discriminator for sidecar type"
-    )
-    schema_version: int = Field(
-        default=1, description="Schema version for compatibility tracking"
-    )
-    created_at: datetime = Field(
-        ..., description="Timestamp when sidecar was created (UTC)"
-    )
-    updated_at: Optional[datetime] = Field(
-        None, description="Timestamp when sidecar was last updated (UTC)"
-    )
-    run_id: str = Field(..., description="Run identifier")
-    staging_dir: str = Field(..., description="Local staging directory path")
-    status: Literal["running", "success", "failed"] = Field(
-        ..., description="Current operation status"
-    )
-    success: bool = Field(..., description="Whether operation succeeded")
-    error: Optional[str] = Field(None, description="Error message if success=False")
-    payload: PostprocessResult = Field(
-        ..., description="The actual PostprocessResult data"
-    )
+class GenerateResultSidecar(_SidecarBase):
+    kind: Literal["generate_result"] = "generate_result"
+    payload: GenerateResult
+
+    @model_validator(mode="after")
+    def coherent(self):
+        self._coherent(self.payload, self.kind)
+        return self
+
+
+class RunResultSidecar(_SidecarBase):
+    kind: Literal["run_result"] = "run_result"
+    payload: ModelRunResult
+
+    @model_validator(mode="after")
+    def coherent(self):
+        self._coherent(self.payload, self.kind)
+        return self
+
+
+class PostprocessResultSidecar(_SidecarBase):
+    kind: Literal["postprocess_result"] = "postprocess_result"
+    payload: PostprocessResult
+
+    @model_validator(mode="after")
+    def coherent(self):
+        self._coherent(self.payload, self.kind)
+        return self
