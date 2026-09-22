@@ -32,13 +32,13 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 
 ## #4 — schema, serialization, and persistence implementation (follow-up)
 
-- [ ] Implement discriminated result variants and envelope/payload validators.
-- [ ] Enforce strict current version/kind checks and actionable legacy rejection.
-- [ ] Implement UTC/order validation, numeric-seconds serialization, and lossless
+- [x] Implement discriminated result variants and envelope/payload validators.
+- [x] Enforce strict current version/kind checks and actionable legacy rejection.
+- [x] Implement UTC/order validation, numeric-seconds serialization, and lossless
   model/JSON/sidecar round trips.
-- [ ] Implement canonical atomic sidecar persistence and observable typed
+- [x] Implement canonical atomic sidecar persistence and observable typed
   persistence failures, retaining primary operation errors.
-- [ ] Add focused mutation and failure-injection tests for the approved contract.
+- [x] Add focused mutation and failure-injection tests for the approved contract.
 
 ## #5 — processor, pipeline, and CLI handoffs (follow-up)
 
