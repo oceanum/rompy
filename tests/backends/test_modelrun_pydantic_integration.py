@@ -5,17 +5,24 @@ These tests verify that the ModelRun.run() method works correctly with
 BackendConfig instances instead of the old string-based backend system.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from rompy.backends import DockerConfig, LocalConfig
-from rompy.core.responses import Artifact, ModelRunResult
+from rompy.core.responses import Artifact, GenerateSuccess, ModelRunFailure, ModelRunSuccess, TimingInfo
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 from tests.test_helpers import DemoConfig
+
+ModelRunResult = (ModelRunSuccess, ModelRunFailure)
+
+
+def typed_generation(path):
+    now = datetime.now(timezone.utc)
+    return GenerateSuccess(run_id="test_run", staging_dir=str(path), generated_files=[], timing=TimingInfo(start_time=now, end_time=now))
 
 
 @pytest.fixture
@@ -67,7 +74,7 @@ class TestModelRunPydanticIntegration:
             timeout=3600,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         assert result.success is True
@@ -85,7 +92,7 @@ class TestModelRunPydanticIntegration:
         # Create LocalConfig without command (will use config.run())
         config = LocalConfig(working_dir=output_dir)
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run_with_run_method.run(backend=config)
 
         assert result.success is True
@@ -126,7 +133,7 @@ class TestModelRunPydanticIntegration:
             working_dir=output_dir,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config, workspace_dir=output_dir)
 
         assert result.success is True
@@ -163,7 +170,7 @@ class TestModelRunPydanticIntegration:
             env_vars={"TEST_VAR": "hello_world"},
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         assert result.success is True
@@ -183,7 +190,7 @@ class TestModelRunPydanticIntegration:
             working_dir=output_dir,  # Command that will fail
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         assert result.success is False
@@ -279,7 +286,7 @@ class TestModelRunPydanticIntegration:
             timeout=3600,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         # Verify result type
@@ -306,7 +313,7 @@ class TestModelRunPydanticIntegration:
             working_dir=tmp_path,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(tmp_path)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(tmp_path)):
             with patch(
                 "rompy.run.LocalRunBackend.run",
                 return_value=False,  # Simulate failure
@@ -363,7 +370,7 @@ class TestModelRunPydanticIntegration:
             working_dir=output_dir,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         # Verify timing was captured
@@ -381,7 +388,7 @@ class TestModelRunPydanticIntegration:
             timeout=7200,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             result = model_run.run(backend=config)
 
         # Verify metadata contains backend config
@@ -402,21 +409,17 @@ class TestModelRunPydanticIntegration:
             command="echo test",
             working_dir=output_dir,
         )
-        discovered = [Artifact(path=str(output_dir / "result.nc"))]
+        discovered = [Artifact(path="result.nc")]
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             with patch.object(
                 DemoConfig, "validate_outputs", return_value=discovered
             ) as mock_validate:
                 result = model_run.run(backend=config)
 
         assert result.success is True
-        # validate_outputs may return absolute paths; ModelRun.run normalizes
-        # artifact paths to be relative to the run output directory. Compare
-        # normalized paths to the result to avoid brittle absolute-path checks.
-        expected = [
-            Artifact(path=str(Path(a.path).relative_to(output_dir))) for a in discovered
-        ]
+        # Canonical artifact identities are already staging-relative.
+        expected = discovered
         assert result.artifacts == expected
         # validate_outputs should be called with the actual run output
         # directory (including the run_id subdirectory in this test).
@@ -434,12 +437,12 @@ class TestModelRunPydanticIntegration:
             working_dir=run_output_dir,
         )
         discovered = [
-            Artifact(path=str(run_output_dir / "result.nc")),
-            Artifact(path=str(run_output_dir / "nested" / "plot.png")),
+            Artifact(path="result.nc"),
+            Artifact(path="nested/plot.png"),
         ]
         model_run.output_dir = output_root
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(run_output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(run_output_dir)):
             with patch.object(
                 DemoConfig, "validate_outputs", return_value=discovered
             ) as mock_validate:
@@ -462,7 +465,7 @@ class TestModelRunPydanticIntegration:
             working_dir=output_dir,
         )
 
-        with patch("rompy.model.ModelRun.generate", return_value=str(output_dir)):
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
             with patch(
                 "rompy.run.LocalRunBackend.run",
                 return_value=False,

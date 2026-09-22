@@ -7,9 +7,10 @@ import pytest
 
 from rompy.backends.config import LocalConfig
 from rompy.core.responses import (
-    GenerateResult,
+    GenerateSuccess,
     GenerateResultSidecar,
     NormalizedContext,
+    TimingInfo,
 )
 from rompy.core.result_persistence import write_generate_result
 from rompy.model import ModelRun
@@ -59,9 +60,9 @@ def test_run_sidecar_copies_normalized_context_from_generate(tmp_path):
 
     gen_context = NormalizedContext(
         model_type="demo",
-        period_start=model.period.start,
-        period_end=model.period.end,
-        period_interval=str(model.period.interval),
+        period_start=model.period.start.replace(tzinfo=timezone.utc),
+        period_end=model.period.end.replace(tzinfo=timezone.utc),
+        period_interval=model.period.interval.total_seconds(),
         output_dir=str(model.output_dir),
         staging_dir=str(workspace),
         config_hash="abc123",
@@ -75,12 +76,13 @@ def test_run_sidecar_copies_normalized_context_from_generate(tmp_path):
         status="success",
         success=True,
         normalized_context=gen_context,
-        payload=GenerateResult(
-            generated_at=datetime.now(timezone.utc),
+        payload=GenerateSuccess(
             staging_dir=str(workspace),
-            config_file=None,
-            success=True,
             generated_files=[],
+            timing=TimingInfo(
+                start_time=datetime.now(timezone.utc), end_time=datetime.now(timezone.utc)
+            ),
+            run_id=model.run_id,
         ),
     )
 
@@ -98,9 +100,7 @@ def test_run_sidecar_copies_normalized_context_from_generate(tmp_path):
     sidecar_data = json.loads(sidecar_path.read_text())
     assert "normalized_context" in sidecar_data
     assert sidecar_data["normalized_context"]["model_type"] == "demo"
-    assert sidecar_data["normalized_context"]["period_interval"] == str(
-        model.period.interval
-    )
+    assert sidecar_data["normalized_context"]["period_interval"] == model.period.interval.total_seconds()
     assert sidecar_data["normalized_context"]["config_hash"] == "abc123"
     assert (
         sidecar_data["normalized_context"]["extensions"]["custom_key"] == "custom_value"
@@ -137,6 +137,6 @@ def test_run_sidecar_computes_fallback_normalized_context(tmp_path):
     assert ctx["output_dir"] == str(tmp_path / "output")
     assert "period_start" in ctx
     assert "period_end" in ctx
-    assert ctx["period_interval"] == str(model.period.interval)
+    assert ctx["period_interval"] == model.period.interval.total_seconds()
     assert ctx["config_hash"] == ""
     assert ctx["extensions"] == {}

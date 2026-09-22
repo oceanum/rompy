@@ -73,6 +73,13 @@ class BasePostprocessorConfig(BaseModel, ABC):
 
         return v
 
+    def build_processor(self):
+        """Construct the processor with this validated configuration."""
+        processor_class = self.get_postprocessor_class()
+        if processor_class is None:
+            raise TypeError(f"{type(self).__name__} did not provide a processor class")
+        return processor_class(self)
+
     @abstractmethod
     def get_postprocessor_class(self):
         """Return the postprocessor class that should handle this configuration.

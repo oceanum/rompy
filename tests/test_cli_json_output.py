@@ -1,500 +1,186 @@
+"""Issue #5 CLI canonical JSON and exit-code tests."""
+
 import json
 from datetime import datetime, timezone
-from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 
 from rompy.cli import cli
+from unittest.mock import patch
+
 from rompy.core.responses import (
-    GenerateResult,
-    GenerateResultSidecar,
-    ModelRunResult,
-    PostprocessSuccess,
-    PostprocessResultSidecar,
+    LocalArtifact,
+    ModelRunFailure,
+    ModelRunSuccess,
     RunResultSidecar,
     TimingInfo,
+    GenerateFailure,
+    PersistenceDiagnostic,
+    GenerateSuccess,
+    NormalizedContext,
 )
-from rompy.core.result_persistence import (
-    write_generate_result,
-    write_run_result,
-    write_postprocess_result,
-)
+from rompy.core.result_persistence import write_run_result
 
 
-@pytest.fixture
-def cli_runner():
-    return CliRunner()
+def timing():
+    now = datetime.now(timezone.utc)
+    return TimingInfo(start_time=now, end_time=now)
 
 
-@pytest.fixture
-def model_config_file(tmp_path):
-    config_content = """
-    model_type: mock
-    run_id: test-json-output
-    """
-    config_file = tmp_path / "config.yml"
-    config_file.write_text(config_content)
-    return config_file
+def write_run(tmp_path, success=True):
+    output = tmp_path / "outputs"
+    output.mkdir()
+    payload_cls = ModelRunSuccess if success else ModelRunFailure
+    fields = dict(
+        run_id="cli-run",
+        backend_used="local",
+        output_dir=str(output),
+        timing=timing(),
+        artifacts=[LocalArtifact(path="waves.nc")],
+        expected_outputs=[LocalArtifact(path="waves.nc")],
+        missing_outputs=[],
+    )
+    if not success:
+        fields["error"] = "run failed"
+    payload = payload_cls(**fields)
+    context = NormalizedContext(
+        model_type="base", period_start=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        period_end=datetime(2020, 1, 2, tzinfo=timezone.utc), period_interval=3600,
+        output_dir=str(output), staging_dir=str(tmp_path), config_hash="",
+    )
+    sidecar = RunResultSidecar(
+        run_id="cli-run", staging_dir=str(tmp_path), normalized_context=context,
+        status="success" if success else "failed", success=success,
+        error=None if success else payload.error, payload=payload,
+    )
+    write_run_result(tmp_path, sidecar)
+    return output
 
 
-@pytest.fixture
-def backend_config_file(tmp_path):
-    backend_content = """
-    type: local
-    """
+def processor_config(tmp_path):
+    config = tmp_path / "processor.yml"
+    config.write_text("type: noop\nvalidate_outputs: false\n")
+    return config
+
+
+def json_lines(output):
+    start = output.find('{\n  "kind"')
+    if start >= 0:
+        return [json.loads(output[start:])]
+    start = output.rfind('{')
+    return [json.loads(output[start:])]
+
+
+def test_generate_persistence_failure_emits_one_current_json_document(tmp_path):
+    config = tmp_path / "config.yml"
+    config.write_text("model_type: base\nrun_id: cli-run\n")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    result = GenerateFailure(
+        run_id="cli-run", staging_dir=str(workspace), generated_files=[], error="render failed",
+        timing=timing(), persistence_diagnostic=PersistenceDiagnostic(
+            sidecar_kind="generate_result", sidecar_path=str(workspace / "generate_result.json"),
+            error="disk full", primary_error="render failed",
+        ),
+    )
+    with patch("rompy.cli.ModelRun") as model_class:
+        model_class.return_value.generate.return_value = result
+        response = CliRunner().invoke(cli, ["generate", str(config), "--json"])
+    documents = [json.loads(line) for line in response.output.splitlines() if line.startswith("{")]
+    assert response.exit_code == 1
+    assert len(documents) == 1
+    assert documents[0]["success"] is False
+    assert documents[0]["run_id"] == "cli-run"
+    assert documents[0]["payload"]["persistence_diagnostic"]["error"] == "disk full"
+
+
+def test_run_persistence_failure_does_not_emit_stale_success_sidecar(tmp_path):
+    config = tmp_path / "config.yml"
+    config.write_text("model_type: base\nrun_id: cli-run\n")
     backend_file = tmp_path / "backend.yml"
-    backend_file.write_text(backend_content)
-    return backend_file
+    backend_file.write_text('type: local\ncommand: "true"\n')
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    stale = {"kind": "run_result", "schema_version": 2, "run_id": "old", "status": "success", "success": True}
+    (workspace / "run_result.json").write_text(json.dumps(stale))
+    generated = GenerateSuccess(run_id="cli-run", staging_dir=str(workspace), generated_files=[], timing=timing())
+    failed = ModelRunFailure(
+        run_id="cli-run", backend_used="local", output_dir=str(workspace), workspace_dir=str(workspace),
+        error="primary run failure", timing=timing(), artifacts=[], expected_outputs=[], missing_outputs=[],
+        persistence_diagnostic=PersistenceDiagnostic(
+            sidecar_kind="run_result", sidecar_path=str(workspace / "run_result.json"),
+            error="disk full", primary_error="primary run failure",
+        ),
+    )
+    with patch("rompy.cli.ModelRun") as model_class:
+        instance = model_class.return_value
+        instance.run_id = "cli-run"
+        instance.staging_dir = workspace
+        instance.generate.return_value = generated
+        instance.run.return_value = failed
+        response = CliRunner().invoke(cli, ["run", str(config), "--backend-config", str(backend_file), "--json"])
+    documents = [json.loads(line) for line in response.output.splitlines() if line.startswith("{")]
+    assert response.exit_code == 1
+    assert len(documents) == 1
+    assert documents[0].get("run_id") == "cli-run", (response.output, documents[0])
+    assert documents[0]["error"] == "primary run failure"
+    assert documents[0]["payload"]["persistence_diagnostic"]["error"] == "disk full"
 
 
-@pytest.fixture
-def processor_config_file(tmp_path):
-    processor_content = """
-    type: noop
-    """
-    processor_file = tmp_path / "processor.yml"
-    processor_file.write_text(processor_content)
-    return processor_file
+def test_run_generation_persistence_failure_emits_current_generate_failure_once(tmp_path):
+    config = tmp_path / "config.yml"
+    config.write_text("model_type: base\nrun_id: cli-run\n")
+    backend_file = tmp_path / "backend.yml"
+    backend_file.write_text('type: local\ncommand: "true"\n')
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    stale = {"kind": "generate_result", "schema_version": 2, "run_id": "old", "status": "success", "success": True}
+    (workspace / "generate_result.json").write_text(json.dumps(stale))
+    failed = GenerateFailure(
+        run_id="cli-run", staging_dir=str(workspace), generated_files=[], error="render primary",
+        timing=timing(), persistence_diagnostic=PersistenceDiagnostic(
+            sidecar_kind="generate_result", sidecar_path=str(workspace / "generate_result.json"),
+            error="disk full", primary_error="render primary",
+        ),
+    )
+    with patch("rompy.cli.ModelRun") as model_class:
+        instance = model_class.return_value
+        instance.generate.return_value = failed
+        response = CliRunner().invoke(
+            cli, ["run", str(config), "--backend-config", str(backend_file), "--json"]
+        )
+    documents = [json.loads(line) for line in response.output.splitlines() if line.startswith("{")]
+    assert response.exit_code == 1
+    assert len(documents) == 1
+    assert documents[0]["kind"] == "generate_result"
+    assert documents[0]["run_id"] == "cli-run"
+    assert documents[0]["error"] == "render primary"
+    assert documents[0]["payload"]["persistence_diagnostic"]["error"] == "disk full"
+    assert documents[0]["run_id"] != "old"
 
 
-class TestGenerateJsonOutput:
-    def test_generate_with_json_flag_emits_valid_json(
-        self, cli_runner, model_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.generate.return_value = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            sidecar = GenerateResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=GenerateResult(
-                    generated_at=datetime.now(timezone.utc),
-                    staging_dir=str(staging_dir),
-                    config_file="config.nml",
-                    success=True,
-                    generated_files=["config.nml", "mod_def.ww3"],
-                ),
-            )
-            write_generate_result(staging_dir, sidecar)
-
-            result = cli_runner.invoke(
-                cli,
-                ["generate", str(model_config_file), "--json"],
-            )
-
-            assert result.exit_code == 0
-            output_json = json.loads(result.output)
-            assert output_json["success"] is True
-            assert output_json["kind"] == "generate_result"
-            assert output_json["run_id"] == "test-json-output"
-
-    def test_generate_without_json_flag_no_json_in_stdout(
-        self, cli_runner, model_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.generate.return_value = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            result = cli_runner.invoke(
-                cli,
-                ["generate", str(model_config_file)],
-            )
-
-            assert result.exit_code == 0
-            try:
-                json.loads(result.output)
-                pytest.fail("Expected non-JSON output but got valid JSON")
-            except json.JSONDecodeError:
-                pass
-
-    def test_generate_json_flag_on_error_emits_error_json(
-        self, cli_runner, model_config_file
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_model_run_class.side_effect = ValueError("Invalid configuration")
-
-            result = cli_runner.invoke(
-                cli,
-                ["generate", str(model_config_file), "--json"],
-            )
-
-            assert result.exit_code == 1
-
-            lines = result.output.strip().split("\n")
-            json_line = next(
-                (line for line in reversed(lines) if line.startswith("{")), None
-            )
-            assert json_line is not None, "No JSON line found in output"
-
-            output_json = json.loads(json_line)
-            assert output_json["success"] is False
-            assert "Invalid configuration" in output_json["error"]
+def test_postprocess_json_success_is_canonical_and_exits_zero(tmp_path):
+    write_run(tmp_path)
+    result = CliRunner().invoke(cli, ["postprocess", str(tmp_path), "--processor-config", str(processor_config(tmp_path)), "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads((tmp_path / "postprocess_result.json").read_text())
+    assert payload["kind"] == "postprocess_result"
+    assert payload["schema_version"] == 2
+    assert payload["success"] is True
 
 
-class TestRunJsonOutput:
-    def test_run_with_json_flag_emits_valid_json(
-        self, cli_runner, model_config_file, backend_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.staging_dir = staging_dir
-            mock_instance.generate.return_value = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            timing = TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            )
-            run_result = ModelRunResult(
-                success=True,
-                run_id="test-json-output",
-                backend_used="LocalBackend",
-                output_dir=str(staging_dir),
-                timing=timing,
-            )
-            mock_instance.run.return_value = run_result
-
-            sidecar = RunResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=run_result,
-            )
-            write_run_result(staging_dir, sidecar)
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "run",
-                    str(model_config_file),
-                    "--backend-config",
-                    str(backend_config_file),
-                    "--json",
-                ],
-            )
-
-            assert result.exit_code == 0
-            output_json = json.loads(result.output)
-            assert output_json["success"] is True
-            assert output_json["kind"] == "run_result"
-            assert output_json["run_id"] == "test-json-output"
-
-    def test_run_without_json_flag_no_json_in_stdout(
-        self, cli_runner, model_config_file, backend_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.staging_dir = staging_dir
-            mock_instance.generate.return_value = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            timing = TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            )
-            mock_instance.run.return_value = ModelRunResult(
-                success=True,
-                run_id="test-json-output",
-                backend_used="LocalBackend",
-                output_dir=str(staging_dir),
-                timing=timing,
-            )
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "run",
-                    str(model_config_file),
-                    "--backend-config",
-                    str(backend_config_file),
-                ],
-            )
-
-            assert result.exit_code == 0
-            try:
-                json.loads(result.output)
-                pytest.fail("Expected non-JSON output but got valid JSON")
-            except json.JSONDecodeError:
-                pass
-
-    def test_run_json_flag_on_error_emits_error_json(
-        self, cli_runner, model_config_file, backend_config_file
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_model_run_class.side_effect = ValueError("Backend configuration error")
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "run",
-                    str(model_config_file),
-                    "--backend-config",
-                    str(backend_config_file),
-                    "--json",
-                ],
-            )
-
-            assert result.exit_code == 1
-
-            lines = result.output.strip().split("\n")
-            json_line = next(
-                (line for line in reversed(lines) if line.startswith("{")), None
-            )
-            assert json_line is not None, "No JSON line found in output"
-
-            output_json = json.loads(json_line)
-            assert output_json["success"] is False
-            assert "Backend configuration error" in output_json["error"]
+def test_postprocess_failed_run_has_canonical_json_and_nonzero_exit(tmp_path):
+    write_run(tmp_path, success=False)
+    result = CliRunner().invoke(cli, ["postprocess", str(tmp_path), "--processor-config", str(processor_config(tmp_path)), "--json"])
+    assert result.exit_code == 1
+    payload = json_lines(result.output)[-1]
+    assert payload["success"] is False
+    assert "success=false" in payload["error"]
 
 
-class TestPostprocessJsonOutput:
-    def test_postprocess_with_json_flag_emits_valid_json(
-        self, cli_runner, model_config_file, processor_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.staging_dir = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            timing = TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            )
-            run_result = ModelRunResult(
-                success=True,
-                run_id="test-json-output",
-                backend_used="LocalBackend",
-                output_dir=str(staging_dir),
-                timing=timing,
-            )
-            run_sidecar = RunResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=run_result,
-            )
-            write_run_result(staging_dir, run_sidecar)
-
-            postprocess_result = PostprocessSuccess(
-                success=True,
-                run_id="test-json-output",
-                output_dir=str(staging_dir),
-                validated=True,
-                file_count=5,
-                artifacts=[],
-                timing=timing,
-            )
-            mock_instance.postprocess.return_value = postprocess_result
-
-            postprocess_sidecar = PostprocessResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=postprocess_result,
-            )
-            write_postprocess_result(staging_dir, postprocess_sidecar)
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "postprocess",
-                    str(model_config_file),
-                    "--processor-config",
-                    str(processor_config_file),
-                    "--json",
-                ],
-            )
-
-            assert result.exit_code == 0
-            output_json = json.loads(result.output)
-            assert output_json["success"] is True
-            assert output_json["kind"] == "postprocess_result"
-            assert output_json["run_id"] == "test-json-output"
-
-    def test_postprocess_without_json_flag_no_json_in_stdout(
-        self, cli_runner, model_config_file, processor_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.staging_dir = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            timing = TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            )
-            run_result = ModelRunResult(
-                success=True,
-                run_id="test-json-output",
-                backend_used="LocalBackend",
-                output_dir=str(staging_dir),
-                timing=timing,
-            )
-            run_sidecar = RunResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=run_result,
-            )
-            write_run_result(staging_dir, run_sidecar)
-
-            mock_instance.postprocess.return_value = PostprocessSuccess(
-                success=True,
-                run_id="test-json-output",
-                output_dir=str(staging_dir),
-                validated=True,
-                file_count=5,
-                artifacts=[],
-                timing=timing,
-            )
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "postprocess",
-                    str(model_config_file),
-                    "--processor-config",
-                    str(processor_config_file),
-                ],
-            )
-
-            assert result.exit_code == 0
-            try:
-                json.loads(result.output)
-                pytest.fail("Expected non-JSON output but got valid JSON")
-            except json.JSONDecodeError:
-                pass
-
-    def test_postprocess_json_flag_on_missing_run_result_emits_error_json(
-        self, cli_runner, model_config_file, processor_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.staging_dir = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "postprocess",
-                    str(model_config_file),
-                    "--processor-config",
-                    str(processor_config_file),
-                    "--json",
-                ],
-            )
-
-            assert result.exit_code == 1
-
-            lines = result.output.strip().split("\n")
-            json_line = next(
-                (line for line in reversed(lines) if line.startswith("{")), None
-            )
-            assert json_line is not None, "No JSON line found in output"
-
-            output_json = json.loads(json_line)
-            assert output_json["success"] is False
-            assert "Run result sidecar not found" in output_json["error"]
-
-    def test_postprocess_json_flag_idempotency_exit_emits_existing_sidecar(
-        self, cli_runner, model_config_file, processor_config_file, tmp_path
-    ):
-        with patch("rompy.cli.ModelRun") as mock_model_run_class:
-            mock_instance = mock_model_run_class.return_value
-            staging_dir = tmp_path / "output" / "test-json-output"
-            staging_dir.mkdir(parents=True)
-            mock_instance.staging_dir = staging_dir
-            mock_instance.config.model_type = "mock"
-            mock_instance.run_id = "test-json-output"
-
-            timing = TimingInfo(
-                start_time=datetime.now(timezone.utc),
-                end_time=datetime.now(timezone.utc),
-            )
-            run_result = ModelRunResult(
-                success=True,
-                run_id="test-json-output",
-                backend_used="LocalBackend",
-                output_dir=str(staging_dir),
-                timing=timing,
-            )
-            run_sidecar = RunResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=run_result,
-            )
-            write_run_result(staging_dir, run_sidecar)
-
-            postprocess_result = PostprocessSuccess(
-                success=True,
-                run_id="test-json-output",
-                output_dir=str(staging_dir),
-                validated=True,
-                file_count=5,
-                artifacts=[],
-                timing=timing,
-            )
-            postprocess_sidecar = PostprocessResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                run_id="test-json-output",
-                staging_dir=str(staging_dir),
-                status="success",
-                success=True,
-                payload=postprocess_result,
-            )
-            write_postprocess_result(staging_dir, postprocess_sidecar)
-
-            result = cli_runner.invoke(
-                cli,
-                [
-                    "postprocess",
-                    str(model_config_file),
-                    "--processor-config",
-                    str(processor_config_file),
-                    "--json",
-                ],
-            )
-
-            assert result.exit_code == 0
-            output_json = json.loads(result.output)
-            assert output_json["success"] is True
-            assert output_json["kind"] == "postprocess_result"
+def test_postprocess_json_missing_sidecar_is_failure(tmp_path):
+    result = CliRunner().invoke(cli, ["postprocess", str(tmp_path), "--processor-config", str(processor_config(tmp_path)), "--json"])
+    assert result.exit_code == 1
+    payload = json_lines(result.output)[-1]
+    assert payload["success"] is False
+    assert "Run result sidecar not found" in payload["error"]

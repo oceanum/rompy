@@ -43,13 +43,13 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 
 ## #5 — processor, pipeline, and CLI handoffs (follow-up)
 
-- [ ] Construct processors through one validated configuration path.
-- [ ] Pass the same validated `ModelRunResult` to processors from direct Python,
+- [x] Construct processors through one validated configuration path.
+- [x] Pass the same validated `ModelRunResult` to processors from direct Python,
   pipeline, CLI, and fresh-process paths.
-- [ ] Validate processor returns as `PostprocessSuccess | PostprocessFailure`.
-- [ ] Enforce strict successful stage prefixes, nested failure evidence, actual
+- [x] Validate processor returns as `PostprocessSuccess | PostprocessFailure`.
+- [x] Enforce strict successful stage prefixes, nested failure evidence, actual
   generated paths, and truthful cleanup outcomes.
-- [ ] Add equivalent-path and stage/cleanup tests.
+- [x] Add equivalent-path and stage/cleanup tests.
 
 ## #6 — canonical fixtures and adversarial validation (follow-up)
 

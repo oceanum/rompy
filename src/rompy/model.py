@@ -12,7 +12,9 @@ import shutil
 import zipfile as zf
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Literal, Optional, Union
+
+from pydantic import TypeAdapter
 
 from pydantic import Field
 
@@ -20,15 +22,21 @@ from rompy.backends import BackendConfig
 from rompy.backends.config import BaseBackendConfig
 from rompy.core.config import BaseConfig
 from rompy.core.responses import (
+    GenerateFailure,
     GenerateResult,
     GenerateResultSidecar,
+    GenerateSuccess,
+    ModelRunFailure,
     ModelRunResult,
+    ModelRunSuccess,
     NormalizedContext,
     PipelineResult,
     PostprocessFailure,
+    PostprocessSuccess,
     PostprocessResult,
     PostprocessResultSidecar,
     TimingInfo,
+    RunResultSidecar,
 )
 from rompy.core.time import TimeRange
 from rompy.core.types import RompyBaseModel
@@ -41,6 +49,10 @@ logger = get_logger(__name__)
 
 # Accepted config types are defined in the entry points of the rompy.config group
 CONFIG_TYPES = load_entry_points("rompy.config")
+# ``typing.Union[()]`` raises during class creation when no plugins are
+# installed.  BaseConfig is the bounded core-safe fallback; installed plugin
+# types remain available for normal configuration loading.
+CONFIG_TYPES = CONFIG_TYPES or (BaseConfig,)
 
 
 def _load_backends():
@@ -78,6 +90,19 @@ def _load_backends():
 
 # Load backends from entry points
 RUN_BACKENDS, POSTPROCESSORS, PIPELINE_BACKENDS = _load_backends()
+
+
+def _make_model_run_result(**data):
+    """Construct the concrete result variant at the runtime boundary."""
+    data.setdefault("artifacts", [])
+    data.setdefault("expected_outputs", [])
+    data.setdefault("missing_outputs", [])
+    variant = ModelRunSuccess if data.get("success") else ModelRunFailure
+    if data.get("success"):
+        data.pop("error", None)
+    elif not data.get("error"):
+        data["error"] = "model execution failed"
+    return variant(**data)
 
 
 class ModelRun(RompyBaseModel):
@@ -172,7 +197,30 @@ class ModelRun(RompyBaseModel):
         except Exception:
             return ""
 
-    def generate(self) -> str:
+    def _normalized_context(self, staging_dir: Path) -> NormalizedContext:
+        """Build the canonical context used by all operation sidecars."""
+        start = self.period.start
+        end = self.period.end
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        else:
+            start = start.astimezone(timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        else:
+            end = end.astimezone(timezone.utc)
+        return NormalizedContext(
+            model_type=getattr(self.config, "model_type", type(self.config).__name__.lower()),
+            period_start=start,
+            period_end=end,
+            period_interval=self.period.interval.total_seconds(),
+            output_dir=str(self.output_dir),
+            staging_dir=str(staging_dir),
+            config_hash=self._compute_config_hash(staging_dir),
+            extensions=self._get_normalized_extensions(),
+        )
+
+    def generate(self) -> GenerateResult:
         """Generate the model input files
 
         returns
@@ -180,6 +228,7 @@ class ModelRun(RompyBaseModel):
         staging_dir : str
 
         """
+        start_time = datetime.now(timezone.utc)
         # Import formatting utilities
         from rompy.formatting import format_table_row, log_box
 
@@ -306,112 +355,59 @@ class ModelRun(RompyBaseModel):
             )
             logger.info(f"Model files generated at: {self.staging_dir}")
 
-            # Write generate result sidecar
-            try:
-                from rompy.core.result_persistence import write_generate_result
-
-                # Collect generated files from staging directory
-                generated_files = [
-                    str(f.relative_to(self.staging_dir))
-                    for f in self.staging_dir.iterdir()
-                    if f.is_file()
-                ]
-
-                model_type = (
-                    self.config.model_type
-                    if hasattr(self.config, "model_type")
-                    else type(self.config).__name__.lower()
-                )
-
-                normalized_ctx = NormalizedContext(
-                    model_type=model_type,
-                    period_start=self.period.start,
-                    period_end=self.period.end,
-                    period_interval=f"{int(self.period.interval.total_seconds())}s",
-                    output_dir=str(self.output_dir),
-                    staging_dir=str(self.staging_dir),
-                    config_hash=self._compute_config_hash(self.staging_dir),
-                    extensions=self._get_normalized_extensions(),
-                )
-
-                # Build GenerateResult payload
-                generate_result = GenerateResult(
-                    generated_at=datetime.now(timezone.utc),
-                    staging_dir=str(self.staging_dir),
-                    config_file=None,  # Could be extracted from config if available
-                    success=True,
-                    error=None,
-                    generated_files=generated_files,
-                )
-
-                # Build GenerateResultSidecar envelope
-                sidecar = GenerateResultSidecar(
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=None,
-                    run_id=self.run_id,
-                    staging_dir=str(self.staging_dir),
-                    status="success",
-                    success=True,
-                    error=None,
-                    payload=generate_result,
-                    normalized_context=normalized_ctx,
-                )
-
-                # Write atomically to staging_dir/generate_result.json
-                sidecar_path = write_generate_result(self.staging_dir, sidecar)
-                logger.debug(f"Wrote generate result sidecar to {sidecar_path}")
-            except Exception as e:
-                # Don't fail the entire generation if sidecar writing fails
-                logger.warning(f"Failed to write generate result sidecar: {e}")
-
-            return self.staging_dir
+            generated_files = [
+                str(f.relative_to(self.staging_dir).as_posix())
+                for f in self.staging_dir.rglob("*")
+                if f.is_file()
+            ]
+            result = GenerateSuccess(
+                run_id=self.run_id,
+                staging_dir=str(self.staging_dir),
+                generated_files=generated_files,
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
+            )
+            normalized_ctx = self._normalized_context(self.staging_dir)
+            sidecar = GenerateResultSidecar(
+                created_at=datetime.now(timezone.utc),
+                run_id=self.run_id,
+                staging_dir=str(self.staging_dir),
+                status="success",
+                success=True,
+                payload=result,
+                normalized_context=normalized_ctx,
+            )
+            from rompy.core.result_persistence import persist_result
+            persisted = persist_result(result, sidecar, self.staging_dir)
+            if isinstance(persisted, GenerateFailure):
+                return persisted
+            return persisted
 
         except Exception as e:
-            # Write failure sidecar if staging_dir is known
-            try:
-                if self.staging_dir is not None:
-                    from rompy.core.result_persistence import write_generate_result
-
-                    model_type = (
-                        self.config.model_type
-                        if hasattr(self.config, "model_type")
-                        else type(self.config).__name__.lower()
-                    )
-
-                    normalized_ctx = NormalizedContext(
-                        model_type=model_type,
-                        period_start=self.period.start,
-                        period_end=self.period.end,
-                        period_interval=f"{int(self.period.interval.total_seconds())}s",
-                        output_dir=str(self.output_dir),
-                        staging_dir=str(self.staging_dir),
-                        config_hash="",
-                        extensions=self._get_normalized_extensions(),
-                    )
-
-                    failure_sidecar = GenerateResultSidecar(
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=None,
-                        run_id=self.run_id,
-                        staging_dir=str(self.staging_dir),
-                        status="failed",
-                        success=False,
-                        error=str(e),
-                        payload=GenerateResult(
-                            generated_at=datetime.now(timezone.utc),
-                            staging_dir=str(self.staging_dir),
-                            config_file=None,
-                            success=False,
-                            generated_files=[],
-                            error=str(e),
-                        ),
-                        normalized_context=normalized_ctx,
-                    )
-                    write_generate_result(self.staging_dir, failure_sidecar)
-            except Exception:
-                # Sidecar write failure must not mask original error
-                pass
-            raise
+            staging_dir = self._staging_dir
+            result = GenerateFailure(
+                run_id=self.run_id,
+                error=str(e),
+                generated_files=(
+                    [str(f.relative_to(staging_dir).as_posix()) for f in staging_dir.rglob("*") if f.is_file()]
+                    if staging_dir is not None and staging_dir.exists() else []
+                ),
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
+                staging_dir=str(staging_dir) if staging_dir is not None else None,
+            )
+            if staging_dir is not None:
+                sidecar = GenerateResultSidecar(
+                    created_at=datetime.now(timezone.utc),
+                    run_id=self.run_id,
+                    staging_dir=str(staging_dir),
+                    status="failed",
+                    success=False,
+                    error=result.error,
+                    payload=result,
+                    normalized_context=self._normalized_context(staging_dir),
+                )
+                from rompy.core.result_persistence import persist_result
+                return persist_result(result, sidecar, staging_dir, primary_error=result.error)
+            return result
 
     def zip(self) -> str:
         """Zip the input files for the model run
@@ -506,24 +502,8 @@ class ModelRun(RompyBaseModel):
 
         # Fallback: compute from model fields if not found or no workspace
         if normalized_ctx is None:
-            model_type = (
-                self.config.model_type
-                if hasattr(self.config, "model_type")
-                else type(self.config).__name__.lower()
-            )
-            normalized_ctx = NormalizedContext(
-                model_type=model_type,
-                period_start=self.period.start,
-                period_end=self.period.end,
-                period_interval=f"{int(self.period.interval.total_seconds())}s",
-                output_dir=str(self.output_dir) if self.output_dir else "",
-                staging_dir=str(workspace_dir) if workspace_dir else "",
-                config_hash=(
-                    self._compute_config_hash(Path(workspace_dir))
-                    if workspace_dir
-                    else ""
-                ),
-                extensions=self._get_normalized_extensions(),
+            normalized_ctx = self._normalized_context(
+                Path(workspace_dir) if workspace_dir else Path(self.output_dir)
             )
 
         return normalized_ctx
@@ -567,7 +547,7 @@ class ModelRun(RompyBaseModel):
         try:
             # Validate backend type
             if not isinstance(backend, BaseBackendConfig):
-                result = ModelRunResult(
+                result = _make_model_run_result(
                     success=False,
                     run_id=self.run_id,
                     backend_used=type(backend).__name__,
@@ -583,8 +563,7 @@ class ModelRun(RompyBaseModel):
 
                 # Write run_result.json sidecar
                 if workspace_dir:
-                    from rompy.core.result_persistence import write_run_result
-                    from rompy.core.responses import RunResultSidecar
+                    from rompy.core.result_persistence import persist_result
 
                     normalized_ctx = self._compute_run_normalized_context(workspace_dir)
 
@@ -599,11 +578,7 @@ class ModelRun(RompyBaseModel):
                         normalized_context=normalized_ctx,
                         payload=result,
                     )
-                    try:
-                        write_run_result(Path(workspace_dir), sidecar)
-                    except Exception:
-                        # Sidecar write failure must NOT mask run result
-                        pass
+                    result = persist_result(result, sidecar, Path(workspace_dir))
 
                 return result
 
@@ -615,93 +590,139 @@ class ModelRun(RompyBaseModel):
             success = backend_instance.run(
                 self, config=backend, workspace_dir=workspace_dir
             )
+            generation_failure = getattr(backend_instance, "generate_result", None)
+            if isinstance(generation_failure, GenerateFailure):
+                success = False
 
-            # Determine output/workspace directories
+            # Derive one authoritative workspace from the typed generation result.
+            effective_workspace = Path(workspace_dir) if workspace_dir else None
+            if effective_workspace is None and generation_failure is not None:
+                effective_workspace = Path(generation_failure.staging_dir) if generation_failure.staging_dir else None
+            if effective_workspace is None:
+                generated = getattr(backend_instance, "generate_result", None)
+                if isinstance(generated, GenerateSuccess):
+                    effective_workspace = Path(generated.staging_dir)
+
             output_dir_path: Optional[Path] = None
             if self.output_dir:
                 output_dir_path = Path(self.output_dir)
                 if self.run_id_subdir:
                     output_dir_path = output_dir_path / self.run_id
-            output_dir_str = (
-                str(output_dir_path) if output_dir_path else str(self.output_dir)
-            )
-            workspace_dir_str = str(workspace_dir) if workspace_dir else None
+            output_dir_str = str(output_dir_path) if output_dir_path else str(self.output_dir)
+            workspace_dir_str = str(effective_workspace) if effective_workspace else None
             backend_class_name = type(backend).__name__.replace("Config", "")
             artifacts = []
-            if success and output_dir_str:
-                artifacts = self.config.validate_outputs(output_dir_str)
-                normalized_artifacts = []
-                output_dir_base = Path(output_dir_str)
-                for artifact in artifacts:
-                    artifact_path = Path(artifact.path)
-                    if artifact_path.is_absolute():
+            expected_outputs = []
+            missing_outputs = []
+            if output_dir_str:
+                discovered = self.config.validate_outputs(output_dir_str) if success else []
+                root = Path(output_dir_str).resolve()
+                for artifact in discovered:
+                    if getattr(artifact, "kind", "local") == "remote":
+                        artifacts.append(artifact)
+                        continue
+                    candidate = Path(artifact.path)
+                    if candidate.is_absolute():
                         try:
-                            normalized_path = artifact_path.relative_to(output_dir_base)
-                        except ValueError:
-                            normalized_path = artifact_path
+                            candidate = candidate.resolve().relative_to(root)
+                        except ValueError as exc:
+                            raise ValueError(f"observed artifact is outside output root: {artifact.path}") from exc
                     else:
-                        try:
-                            normalized_path = artifact_path.relative_to(output_dir_base)
-                        except ValueError:
-                            normalized_path = artifact_path
-                    normalized_artifacts.append(
-                        artifact.model_copy(update={"path": str(normalized_path)})
-                    )
-                artifacts = normalized_artifacts
+                        candidate = Path(str(candidate))
+                    artifacts.append(artifact.model_copy(update={"path": candidate.as_posix()}))
+                declared = self.config.expected_artifacts() if success else []
+                for artifact in declared:
+                    if getattr(artifact, "kind", "local") == "remote":
+                        expected = artifact
+                    else:
+                        candidate = Path(artifact.path)
+                        if candidate.is_absolute():
+                            try:
+                                candidate = candidate.resolve().relative_to(root)
+                            except ValueError as exc:
+                                raise ValueError(f"expected artifact is outside output root: {artifact.path}") from exc
+                        expected = artifact.model_copy(update={"path": candidate.as_posix()})
+                    expected_outputs.append(expected)
+                def _identity(item):
+                    return (item.kind, item.path) if item.kind == "local" else (item.kind, item.uri)
 
-            result = ModelRunResult(
+                observed_ids = {_identity(item) for item in artifacts}
+                missing_outputs = [item for item in expected_outputs if _identity(item) not in observed_ids]
+
+            run_context = self._compute_run_normalized_context(str(effective_workspace)) if effective_workspace else None
+            result = _make_model_run_result(
                 success=success,
                 run_id=self.run_id,
                 backend_used=backend_class_name,
                 output_dir=output_dir_str,
                 workspace_dir=workspace_dir_str,
                 artifacts=artifacts,
-                error=None,
+                expected_outputs=expected_outputs,
+                missing_outputs=missing_outputs,
+                error=(generation_failure.error if isinstance(generation_failure, GenerateFailure) else None),
                 message=(
                     "Model execution completed successfully"
                     if success
-                    else "Model execution failed"
+                    else (generation_failure.error if isinstance(generation_failure, GenerateFailure) else "Model execution failed")
                 ),
                 timing=TimingInfo(
                     start_time=start_time,
                     end_time=datetime.now(timezone.utc),
                 ),
                 metadata={
-                    "backend_config": backend.model_dump(exclude_none=True),
+                    "backend_config": backend.model_dump(mode="json", exclude_none=True),
+                    **({"generate_result": generation_failure.model_dump(mode="json")} if isinstance(generation_failure, GenerateFailure) else {}),
+                    **({"normalized_context": run_context.model_dump(mode="json")} if run_context is not None else {}),
                 },
             )
 
             # Write run_result.json sidecar
-            if workspace_dir:
-                from rompy.core.result_persistence import write_run_result
-                from rompy.core.responses import RunResultSidecar
+            if effective_workspace:
+                from rompy.core.result_persistence import persist_result
 
-                normalized_ctx = self._compute_run_normalized_context(workspace_dir)
+                normalized_ctx = run_context or self._compute_run_normalized_context(str(effective_workspace))
 
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     updated_at=None,
                     run_id=result.run_id,
-                    staging_dir=str(workspace_dir),
+                    staging_dir=str(effective_workspace),
                     status="success" if result.success else "failed",
                     success=result.success,
-                    error=result.error,
+                    error=result.error if not result.success else None,
                     normalized_context=normalized_ctx,
                     payload=result,
                 )
-                try:
-                    write_run_result(Path(workspace_dir), sidecar)
-                except Exception:
-                    # Sidecar write failure must NOT mask run result
-                    pass
+                result = persist_result(result, sidecar, effective_workspace)
 
             return result
 
         except Exception as e:
-            # Wrap any exceptions in ModelRunResult
-            workspace_dir_str = str(workspace_dir) if workspace_dir else None
+            # A backend may generate implicitly before raising.  Recover that
+            # typed generation path so the failure remains durable and useful.
+            known_workspace = locals().get("effective_workspace")
+            if known_workspace is None and workspace_dir:
+                known_workspace = Path(workspace_dir)
+            if known_workspace is None:
+                generated = locals().get("backend_instance")
+                generated_result = getattr(generated, "generate_result", None)
+                if isinstance(generated_result, (GenerateSuccess, GenerateFailure)):
+                    known_workspace = (
+                        Path(generated_result.staging_dir)
+                        if generated_result.staging_dir
+                        else None
+                    )
+            workspace_dir_str = str(known_workspace) if known_workspace else None
+            normalized_ctx = (
+                self._compute_run_normalized_context(workspace_dir_str)
+                if workspace_dir_str
+                else None
+            )
 
-            result = ModelRunResult(
+            output_dir_path = Path(self.output_dir) if self.output_dir else None
+            if output_dir_path is not None and self.run_id_subdir:
+                output_dir_path = output_dir_path / self.run_id
+            result = _make_model_run_result(
                 success=False,
                 run_id=self.run_id,
                 backend_used=(
@@ -709,7 +730,7 @@ class ModelRun(RompyBaseModel):
                     if isinstance(backend, BaseBackendConfig)
                     else "unknown"
                 ),
-                output_dir=str(self.output_dir),
+                output_dir=str(output_dir_path) if output_dir_path else str(self.output_dir),
                 workspace_dir=workspace_dir_str,
                 error=str(e),
                 message=f"Model execution failed with exception: {str(e)}",
@@ -717,31 +738,37 @@ class ModelRun(RompyBaseModel):
                     start_time=start_time,
                     end_time=datetime.now(timezone.utc),
                 ),
+                metadata=(
+                    {"normalized_context": normalized_ctx.model_dump(mode="json")}
+                    if normalized_ctx is not None
+                    else {}
+                ),
             )
 
-            # Write run_result.json sidecar
-            if workspace_dir:
-                from rompy.core.result_persistence import write_run_result
-                from rompy.core.responses import RunResultSidecar
+            # Write run_result.json sidecar at the recovered generated path.
+            if known_workspace:
+                from rompy.core.result_persistence import persist_result
 
-                normalized_ctx = self._compute_run_normalized_context(workspace_dir)
-
+                normalized_ctx = normalized_ctx or self._compute_run_normalized_context(
+                    str(known_workspace)
+                )
                 sidecar = RunResultSidecar(
                     created_at=datetime.now(timezone.utc),
                     updated_at=None,
                     run_id=result.run_id,
-                    staging_dir=str(workspace_dir),
+                    staging_dir=str(known_workspace),
                     status="failed",
                     success=False,
                     error=result.error,
                     normalized_context=normalized_ctx,
                     payload=result,
                 )
-                try:
-                    write_run_result(Path(workspace_dir), sidecar)
-                except Exception:
-                    # Sidecar write failure must NOT mask run result
-                    pass
+                result = persist_result(
+                    result,
+                    sidecar,
+                    known_workspace,
+                    primary_error=result.error,
+                )
 
             return result
 
@@ -803,88 +830,57 @@ class ModelRun(RompyBaseModel):
         try:
             if not isinstance(processor, BasePostprocessorConfig):
                 raise TypeError(
-                    f"processor must be a BasePostprocessorConfig instance, "
-                    f"got {type(processor).__name__}"
+                    f"processor must be a BasePostprocessorConfig instance, got {type(processor).__name__}"
                 )
-
-            # Get processor class from config
-            processor_class = processor.get_postprocessor_class()
-            if processor_class is None:
-                raise TypeError(
-                    f"processor config {type(processor).__name__} did not provide a postprocessor class"
-                )
-            processor_instance = processor_class()
-
-            # Extract processor-specific fields (exclude common base fields)
-            base_fields = {"timeout", "env_vars", "working_dir", "type"}
-            processor_fields = {
-                k: v for k, v in processor.model_dump().items() if k not in base_fields
-            }
-
-            # Merge with any user-provided kwargs (kwargs take precedence)
-            processor_fields.update(kwargs)
-
-            process_target = processor_input if processor_input is not None else self
-            result = processor_instance.process(process_target, **processor_fields)
-            sidecar_error: Optional[str] = None
-            if not result.success:
-                sidecar_error = result.error
-
-            # Write postprocess result sidecar
-            from rompy.core.result_persistence import write_postprocess_result
-
+            if processor_input is None:
+                raise TypeError("processor_input must be a validated ModelRunResult")
+            if not isinstance(processor_input, (ModelRunSuccess, ModelRunFailure)):
+                raise TypeError("processor_input must be a concrete ModelRunSuccess or ModelRunFailure")
+            run_result = TypeAdapter(ModelRunResult).validate_python(processor_input)
+            processor_instance = processor.build_processor()
+            # Options are explicit process options, never flattened constructor state.
+            process_options = dict(kwargs)
+            result = processor_instance.process(run_result, **process_options)
+            if not isinstance(result, (PostprocessSuccess, PostprocessFailure)):
+                raise TypeError("processor output must be a concrete PostprocessSuccess or PostprocessFailure")
+            result = TypeAdapter(PostprocessResult).validate_python(result)
             sidecar = PostprocessResultSidecar(
                 created_at=datetime.now(timezone.utc),
-                updated_at=None,
-                run_id=self.run_id,
+                run_id=run_result.run_id,
                 staging_dir=str(self.staging_dir),
                 status="success" if result.success else "failed",
                 success=result.success,
-                error=sidecar_error,
-                payload=cast(PostprocessResult, result),
-            )
-            try:
-                write_postprocess_result(Path(self.staging_dir), sidecar)
-            except Exception:
-                # Sidecar write failure must NOT mask postprocess result
-                pass
-
-            return result
-
-        except Exception as e:
-            # Wrap any top-level exceptions in PostprocessFailure
-            result = PostprocessFailure(
-                success=False,
-                run_id=self.run_id,
-                output_dir=str(self.staging_dir),
-                message=f"Postprocessing failed: {str(e)}",
-                error=str(e),
-                timing=TimingInfo(
-                    start_time=start_time,
-                    end_time=datetime.now(timezone.utc),
-                ),
-            )
-
-            # Write postprocess result sidecar (failure case)
-            from rompy.core.result_persistence import write_postprocess_result
-
-            sidecar = PostprocessResultSidecar(
-                created_at=datetime.now(timezone.utc),
-                updated_at=None,
-                run_id=self.run_id,
-                staging_dir=str(self.staging_dir),
-                status="failed",
-                success=False,
-                error=str(e),
+                error=None if result.success else result.error,
                 payload=result,
             )
+            from rompy.core.result_persistence import persist_result
+            return persist_result(result, sidecar, Path(self.staging_dir),
+                                  primary_error=None if result.success else result.error)
+        except Exception as e:
+            result = PostprocessFailure(
+                run_id=self.run_id,
+                output_dir=str(self.staging_dir),
+                message=f"Postprocessing failed: {e}",
+                error=f"Processor protocol failure: {e}",
+                artifacts=[], expected_outputs=[], missing_outputs=[],
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
+            )
+            if (
+                "validation error" in str(e).lower()
+                or "concrete ModelRun" in str(e)
+                or "concrete Postprocess" in str(e)
+            ) and processor_input is not None:
+                return result
             try:
-                write_postprocess_result(Path(self.staging_dir), sidecar)
+                sidecar = PostprocessResultSidecar(
+                    created_at=datetime.now(timezone.utc), run_id=self.run_id,
+                    staging_dir=str(self.staging_dir), status="failed", success=False,
+                    error=result.error, payload=result,
+                )
+                from rompy.core.result_persistence import persist_result
+                return persist_result(result, sidecar, Path(self.staging_dir), primary_error=result.error)
             except Exception:
-                # Sidecar write failure must NOT mask postprocess result
-                pass
-
-            return result
+                return result
 
     def pipeline(self, pipeline_backend: str = "local", **kwargs) -> PipelineResult:
         """
