@@ -190,7 +190,7 @@ snippets against the public package.
 | Persistence failure | Producers hid failures; epic requires observable failures | Resolved by #3; #4 implements typed diagnostics. |
 | Atomicity | Current code provides atomic replacement visibility, not crash durability | #4 defines and validates the promised durability level. |
 
-## Proposed invariant matrix (not yet approved)
+## Approved invariant matrix (resolved by issue #3)
 
 | Concern | Proposed canonical invariant |
 |---|---|
@@ -239,7 +239,7 @@ uv run --no-sync --directory rompy pytest -q tests/test_responses.py tests/test_
 
 Warnings are not causes of the seven failures. The unknown integration mark and unrelated WW3 Pydantic deprecation should be tracked separately if desired.
 
-## Owner decisions still pending (maximum three)
+## Owner decisions resolved by issue #3 (historical pending section)
 
 1. **Compatibility/versioning (D1):** Resolved by #3: reject legacy/ambiguous core-v1 and flat WW3-v1 artifacts with actionable kind/version errors; no migration reader now. Wire intervals/durations are numeric seconds.
 2. **Artifact identity (D2):** Resolved by #3: use staging-relative local paths, an explicit remote URI variant, observed-only `artifacts`, and structured expected/missing evidence.
@@ -258,7 +258,7 @@ all execution paths.
 - [x] Findings include source evidence, observable impact, smallest resolution, falsifiable test shape, and follow-up ownership.
 - [x] Focused baseline failures classified with command/log reference.
 - [x] Contradiction/decision table recorded.
-- [x] Proposed invariant matrix recorded and explicitly marked pending approval.
+- [x] Invariant matrix recorded and approved by issue #3 contract documents.
 - [x] Prioritized TDD slices mapped to #3–#6.
 - [x] No source behavior changed; plugins remain unchanged.
 - [x] D1 compatibility/version policy approved by issue #3.

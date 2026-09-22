@@ -22,8 +22,13 @@ below are intentionally uncompleted unless a follow-up issue owns them.
   `PostprocessSuccess | PostprocessFailure` output, and parity boundaries.
 - [x] Define strict pipeline successful-prefix, nested evidence, actual-path,
   and cleanup semantics.
-- [x] Add bounded normative JSON examples without adding #6's fixture corpus.
+- [x] Add syntactically valid bounded normative success, failure, and malformed
+  JSON examples plus falsifiable round-trip/rejection requirements; executable
+  validation and frozen hashes remain with #6 after #4/#5 implementation.
+- [x] Restore concise required-field and persistence-diagnostic definitions for
+  every approved result variant.
 - [x] Reconcile design/spec/coverage material and identify #4/#5/#6 ownership.
+- [x] Record exact JSON syntax-validation and OpenSpec validation commands.
 
 ## #4 — schema, serialization, and persistence implementation (follow-up)
 
@@ -49,8 +54,10 @@ below are intentionally uncompleted unless a follow-up issue owns them.
 
 - [ ] Create frozen executable success/failure/malformed/legacy fixtures and
   publish hashes.
-- [ ] Validate fresh-process replay and all documented JSON examples.
+- [ ] Validate fresh-process replay and all documented JSON examples after #4/#5
+  implement the contract.
 - [ ] Add adversarial artifact, URI, traversal, version, and contradiction cases.
+- [ ] Publish frozen hashes for the executable fixture corpus.
 
 ## Explicit non-goals for this change
 

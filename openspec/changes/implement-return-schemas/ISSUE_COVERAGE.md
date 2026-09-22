@@ -25,7 +25,7 @@ runtime implementation, plugin adaptation, or frozen fixture completion.
 | UTC timing, end>=start, numeric seconds | `specs/timing-metadata/spec.md`; `result-schemas` timing requirement | #4 |
 | Pipeline strict successful prefix and cleanup evidence | `design.md`; `result-schemas` pipeline scenarios | #5 |
 | Observable persistence failure and primary-error preservation | `design.md`; serialization/result-schema persistence requirements | #4 |
-| Representative reviewable JSON shape | `design.md` bounded contract fixtures | #6 turns into frozen executable fixtures |
+| Syntactically valid success/failure/malformed JSON plus falsifiable round-trip/rejection requirements | `design.md` bounded contract fixtures; `specs/result-serialization/spec.md` scenarios | #4/#5 implement loaders/validators; #6 executes examples and freezes fixture hashes |
 
 ## Ownership boundaries
 
@@ -52,8 +52,9 @@ runtime implementation, plugin adaptation, or frozen fixture completion.
 
 ### Issue #6 — fixture/validation follow-up (not complete here)
 
-- Frozen executable success/failure/malformed/legacy fixtures and hashes.
-- Fresh-process replay and adversarial contract validation.
+- Frozen executable success/failure/malformed/legacy fixtures and hashes after
+  #4/#5 implement the contract.
+- Fresh-process replay and adversarial contract validation after #4/#5.
 - No fixture corpus is added by issue #3.
 
 ## Deliberate non-coverage

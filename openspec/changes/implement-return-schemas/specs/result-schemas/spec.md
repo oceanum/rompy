@@ -7,6 +7,35 @@ pipeline, and postprocessing.  `PostprocessResult` SHALL be
 `PipelineSuccess | PipelineFailure`; `ModelRunResult` and `GenerateResult` SHALL
 use the same discriminator pattern.
 
+The approved variants SHALL use these required fields:
+
+- `GenerateSuccess`: `success=true`, `run_id`, `staging_dir`,
+  `generated_files`, and `timing`; `GenerateFailure`: `success=false`,
+  `run_id`, `error`, `generated_files`, and `timing`, with known staging/config
+  paths optional.
+- `ModelRunSuccess`: `success=true`, `run_id`, `backend_used`, `output_dir`,
+  `timing`, and typed `artifacts`, `expected_outputs`, and `missing_outputs`;
+  `ModelRunFailure`: `success=false`, `run_id`, `backend_used`, `error`,
+  `timing`, and the same three evidence lists, with output/workspace paths
+  optional.
+- `PostprocessSuccess`: `success=true`, `run_id`, `output_dir`, `validated`,
+  `timing`, and the three typed evidence lists; `PostprocessFailure`:
+  `success=false`, `run_id`, `error`, `timing`, and those evidence lists, with
+  `output_dir` optional.
+- `PipelineSuccess`: `success=true`, `run_id`, exact successful stage list,
+  `backend`, `processor`, `staging_dir`, `output_dir`, nested
+  `PostprocessSuccess`, `timing`, and `stage_timings`; `PipelineFailure`:
+  `success=false`, `run_id`, strict successful prefix, `backend`, `processor`,
+  `failed_stage`, `error`, `timing`, `stage_timings`, and `cleaned_up`, with
+  known paths optional and nested `PostprocessFailure` required when the
+  failed stage is `POSTPROCESS`.
+
+Every timing is UTC and every failure timing is mandatory.  Every operation
+variant may carry optional JSON-safe `metadata`; a persistence failure carries
+an exact `persistence_diagnostic` object with `status="failed"`,
+`sidecar_kind: str`, `sidecar_path: str`, `error: str`, and
+`primary_error: str | null`.
+
 #### Scenario: Successful postprocessing
 - **WHEN** postprocessing completes successfully
 - **THEN** the result is `PostprocessSuccess` with `success=true`, `run_id`, output location, timing, observed artifacts, and validation evidence.
@@ -26,6 +55,10 @@ use the same discriminator pattern.
 #### Scenario: Invalid discriminator state
 - **WHEN** a result claims success while carrying a failure error, or claims failure without an error
 - **THEN** validation rejects the result with an actionable validation error.
+
+#### Scenario: Malformed canonical envelope
+- **WHEN** a syntactically valid envelope disagrees with its payload on `run_id` or `success`
+- **THEN** the loader rejects it with an actionable envelope/payload coherence error identifying the mismatched fields.
 
 ### Requirement: Coherent sidecar envelopes
 Each canonical sidecar SHALL contain one supported `kind`, the strict current

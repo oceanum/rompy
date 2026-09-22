@@ -29,6 +29,51 @@ that this is the intended public direction.  Generation likewise moves toward a
 typed `GenerateResult`; its compatibility transition is implementation work,
 not a second API in this change.
 
+## Normative result fields and requiredness
+
+The following field contract is normative.  `required` means every instance of
+that variant carries the field; `optional` means the field may be absent or
+null.  Defaults such as an empty evidence list are still canonical values, not
+an excuse to omit required evidence from a serialized result.
+
+Shared types:
+
+- `TimingInfo` requires `start_time: UTC datetime`, `end_time: UTC datetime`,
+  and derived numeric `duration_seconds: float`; `end_time >= start_time`.
+- `ArtifactIdentity` is either `{kind: "local", path: str}` or
+  `{kind: "remote", uri: str}`.  Local paths are normalized staging-relative
+  paths; remote URIs are explicit non-file URI identities.
+- `PersistenceDiagnostic` is optional on operation results and, when present,
+  requires exactly `status: Literal["failed"]`, `sidecar_kind: str`,
+  `sidecar_path: str`, `error: str`, and `primary_error: str | None`.
+  `primary_error` preserves the original operation error when persistence also
+  fails.  It is absent on an ordinary failure whose sidecar was persisted.
+- `StageTiming` requires `stage: PipelineStage` and `timing: TimingInfo`.
+  `stage_timings: list[StageTiming]` contains every completed stage and the
+  attempted failed stage, when a failed stage started.
+- `artifacts`, `expected_outputs`, and `missing_outputs` are typed lists.  The
+  first contains observed outputs only; the latter two are validation
+  evidence.  `metadata` is an optional JSON-safe mapping.
+
+Variant fields:
+
+| Variant | Required fields | Optional fields and constraints |
+|---|---|---|
+| `GenerateSuccess` | `success=true`, `run_id`, `staging_dir`, `generated_files`, `timing` | `config_file`, `metadata`, `persistence_diagnostic` (must be absent for persisted success) |
+| `GenerateFailure` | `success=false`, `run_id`, `error`, `timing`, `generated_files` | `staging_dir`, `config_file`, `metadata`, `persistence_diagnostic`; a persistence failure uses the exact diagnostic above |
+| `ModelRunSuccess` | `success=true`, `run_id`, `backend_used`, `output_dir`, `timing`, `artifacts`, `expected_outputs`, `missing_outputs` | `workspace_dir`, `message`, `metadata`, `persistence_diagnostic` (must be absent for persisted success) |
+| `ModelRunFailure` | `success=false`, `run_id`, `backend_used`, `error`, `timing`, `artifacts`, `expected_outputs`, `missing_outputs` | `output_dir`, `workspace_dir`, `message`, `metadata`, `persistence_diagnostic`; `output_dir` is optional because execution may fail before one exists |
+| `PostprocessSuccess` | `success=true`, `run_id`, `output_dir`, `validated`, `timing`, `artifacts`, `expected_outputs`, `missing_outputs` | `file_count`, `message`, `metadata`, `persistence_diagnostic` (must be absent for persisted success) |
+| `PostprocessFailure` | `success=false`, `run_id`, `error`, `timing`, `artifacts`, `expected_outputs`, `missing_outputs` | `output_dir`, `message`, `metadata`, `persistence_diagnostic` |
+| `PipelineSuccess` | `success=true`, `run_id`, `stages_completed=[GENERATE,RUN,POSTPROCESS]`, `backend`, `processor`, `staging_dir`, `output_dir`, `postprocess_results: PostprocessSuccess`, `timing`, `stage_timings` | `workspace_dir`, `message`, `metadata`, `persistence_diagnostic` (must be absent for persisted success) |
+| `PipelineFailure` | `success=false`, `run_id`, `stages_completed` (strict prefix), `backend`, `processor`, `failed_stage`, `error`, `timing`, `stage_timings`, `cleaned_up` | `staging_dir`, `workspace_dir`, `output_dir`, `postprocess_results: PostprocessFailure` only when `failed_stage=POSTPROCESS`, `message`, `metadata`, `persistence_diagnostic` |
+
+For a failed pipeline, `failed_stage`, `error`, operation `timing`, and
+`stage_timings` are the failed-stage evidence.  A postprocess failure also
+retains its nested `PostprocessFailure` and timing.  A generate or run failure
+retains any known generated path and run result evidence in the corresponding
+failure fields.  No failed stage is included in `stages_completed`.
+
 ## Sidecar envelope
 
 The three canonical files remain `generate_result.json`, `run_result.json`,
@@ -183,7 +228,7 @@ Canonical successful run sidecar:
 }
 ```
 
-Canonical failed postprocess result with persistence evidence:
+Canonical failed postprocess result:
 
 ```json
 {
@@ -198,6 +243,11 @@ Canonical failed postprocess result with persistence evidence:
     "success": false,
     "error": "postprocess validation failed",
     "output_dir": "results/run-42",
+    "timing": {
+      "start_time": "2026-03-10T10:00:00Z",
+      "end_time": "2026-03-10T10:00:01.250000Z",
+      "duration_seconds": 1.25
+    },
     "artifacts": [
       {"kind": "local", "path": "outputs/waves.nc", "artifact_type": "netcdf"}
     ],
@@ -208,20 +258,62 @@ Canonical failed postprocess result with persistence evidence:
     "missing_outputs": [
       {"kind": "local", "path": "outputs/wind.nc", "reason": "not produced"}
     ],
-    "metadata": {
-      "persistence": {
-        "status": "persisted",
-        "sidecar_kind": "postprocess_result"
-      }
-    }
+    "metadata": {}
   }
 }
 ```
 
+The following bounded malformed example is syntactically valid JSON but is
+rejected because the envelope and payload disagree on `run_id` and `success`:
+
+```json
+{
+  "kind": "run_result",
+  "schema_version": 2,
+  "run_id": "run-42",
+  "status": "success",
+  "success": true,
+  "error": null,
+  "payload": {
+    "run_id": "run-99",
+    "success": false,
+    "error": "model failed",
+    "backend_used": "local",
+    "output_dir": "results/run-42",
+    "timing": {
+      "start_time": "2026-03-10T10:00:00Z",
+      "end_time": "2026-03-10T10:00:01Z",
+      "duration_seconds": 1.0
+    },
+    "artifacts": [],
+    "expected_outputs": [],
+    "missing_outputs": []
+  }
+}
+```
+
+A conforming loader rejects it with an actionable envelope/payload coherence
+error identifying both mismatched fields.  #4 must implement model, JSON, and
+sidecar round trips and the rejection matrix; #6 will execute those examples
+and publish frozen hashes after #4/#5 implement the contract.
+
+The exact syntax-validation command for these bounded JSON examples is:
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+import json, re
+for path in (Path('openspec/changes/implement-return-schemas/design.md'), Path('SCHEMA_DESIGN.md')):
+    for match in re.finditer(r'```json\n(.*?)\n```', path.read_text(), re.S):
+        json.loads(match.group(1))
+print('all bounded JSON examples are syntactically valid')
+PY
+```
+
 A persistence failure uses the same typed failure shape, with
-`metadata.persistence.status = "failed"`, the sidecar path/kind and write
-error, and (when applicable) `metadata.persistence.primary_error` retaining the
-original generate/run/postprocess error.  The operation is never silently
+`persistence_diagnostic.status = "failed"`, the sidecar path/kind and write
+error, and (when applicable) `persistence_diagnostic.primary_error` retaining
+the original generate/run/postprocess error.  The operation is never silently
 reported as successfully persisted.
 
 ## Validation boundary and follow-ups

@@ -412,32 +412,39 @@ Examples:
 class ModelRunResult(RompyBaseModel):
     """Result from model execution via a backend.
 
-    Returned by `ModelRun.run_detailed()` to provide structured information
-    about model execution (without postprocessing).
+    Returned by `ModelRun.run()` as the typed execution result (without
+    postprocessing). The `success` discriminator selects the success or failure
+    variant; consumers do not infer state from optional fields.
 
     Attributes:
-        success: Whether execution succeeded
+        success: Literal discriminator for the result variant
         run_id: Run identifier (from ModelRun)
         backend_used: Backend class name
-        output_dir: Output directory path
-        workspace_dir: Workspace directory (backend-specific)
-        timing: Execution timing
-        artifacts: List of output artifacts discovered after execution
-        error: Error message if success=False
-        message: Additional context
-        metadata: Backend-specific metadata (extensible dict)
+        output_dir: Output directory path when known
+        workspace_dir: Workspace directory (backend-specific, optional)
+        timing: Required UTC execution timing
+        artifacts: Observed output artifacts
+        expected_outputs: Structured expected-output evidence
+        missing_outputs: Structured missing-output evidence
+        error: Required on the failure variant
+        message: Additional context (optional)
+        metadata: Backend-specific JSON-safe metadata (optional)
+        persistence_diagnostic: Typed persistence failure evidence when needed
 
     Examples:
         ::
 
-            result = model_run.run_detailed(backend_config)
+            result = model_run.run(backend_config)
 
             if result.success:
                 print(f"Run completed in {result.timing.duration_seconds:.1f}s")
                 print(f"Output: {result.output_dir}")
-                print(f"Artifacts: {len(result.artifacts)}")
             else:
                 print(f"Run failed: {result.error}")
+
+    For raw union deserialization, use an explicit Pydantic ``TypeAdapter``
+    for ``ModelRunResult`` or a concrete sidecar loader; the union alias is not
+    itself a model class.
     """
 
     success: bool = Field(..., description="Whether execution succeeded")

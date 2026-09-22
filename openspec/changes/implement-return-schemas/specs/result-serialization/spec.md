@@ -26,11 +26,19 @@ callers SHALL use the concrete envelope loader or an explicit Pydantic
 
 #### Scenario: Valid canonical round trip
 - **WHEN** a canonical envelope is dumped, written, loaded, and validated
-- **THEN** the same kind/version, typed result state, timing, artifact identities, and output evidence are reconstructed.
+- **THEN** the same kind/version, typed result state, timing, artifact identities, and output evidence are reconstructed without deleting computed fields or rewriting paths/URIs.
+
+#### Scenario: Normative example round trip
+- **WHEN** the bounded success and failure JSON examples in `design.md` are passed through the future concrete envelope loaders
+- **THEN** they validate and round-trip to semantically equivalent canonical JSON; executable validation is follow-up work for #4/#5 and frozen fixture/hash publication belongs to #6.
 
 #### Scenario: Malformed result
 - **WHEN** a required field is missing, a discriminator is contradictory, or a nested payload is the wrong family
 - **THEN** deserialization fails with an actionable validation error.
+
+#### Scenario: Normative malformed example rejection
+- **WHEN** the bounded malformed JSON example in `design.md` is loaded
+- **THEN** deserialization rejects it for envelope/payload `run_id` and `success` mismatch; executable validation remains owned by #4/#5 and frozen replay by #6.
 
 #### Scenario: Legacy or ambiguous sidecar
 - **WHEN** a core-v1 or flat WW3-v1 sidecar, missing version, boolean version, or unsupported version is loaded
