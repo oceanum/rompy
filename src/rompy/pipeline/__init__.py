@@ -282,6 +282,7 @@ class LocalPipelineBackend:
             logger.info(f"Stage 2: Running model using {backend_type} backend")
 
             try:
+                run_start = datetime.now(timezone.utc)
                 # Pass the generated workspace directory to avoid duplicate generation
                 run_result = model_run.run(
                     backend=backend_config, workspace_dir=staging_dir
@@ -319,7 +320,7 @@ class LocalPipelineBackend:
             except Exception as e:
                 logger.exception(f"Error during model run: {e}")
                 run_timing = TimingInfo(
-                    start_time=datetime.now(timezone.utc), end_time=datetime.now(timezone.utc)
+                    start_time=run_start, end_time=datetime.now(timezone.utc)
                 )
                 run_failure = ModelRunFailure(
                     run_id=model_run.run_id,

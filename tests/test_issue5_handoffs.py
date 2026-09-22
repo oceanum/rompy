@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -252,7 +253,13 @@ def test_pipeline_stage_exceptions_retain_typed_nested_failures(tmp_path):
 
     model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
     model.generate.return_value = generated
-    model.run.side_effect = RuntimeError("run primary")
+    delay = 0.05
+
+    def delayed_run(*_args, **_kwargs):
+        time.sleep(delay)
+        raise RuntimeError("run primary")
+
+    model.run.side_effect = delayed_run
     result = LocalPipelineBackend().execute(
         model, backend_config=LocalConfig(command="true"), processor=RecordingConfig()
     )
@@ -260,6 +267,12 @@ def test_pipeline_stage_exceptions_retain_typed_nested_failures(tmp_path):
     assert result.stages_completed == [PipelineStage.GENERATE]
     assert isinstance(result.run_result, ModelRunFailure)
     assert result.run_result.error == "run primary"
+    assert result.run_result.timing.end_time >= result.run_result.timing.start_time
+    assert result.run_result.timing.duration_seconds >= delay * 0.8
+    run_stage_timing = result.stage_timings[-1].timing
+    assert run_stage_timing.start_time == result.run_result.timing.start_time
+    assert run_stage_timing.end_time == result.run_result.timing.end_time
+    assert run_stage_timing.duration_seconds == result.run_result.timing.duration_seconds
 
     model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
     model.generate.return_value = generated
