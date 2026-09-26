@@ -1,6 +1,9 @@
 """Contract tests for the typed postprocessor context and step protocol."""
 
 from datetime import datetime, timezone
+import math
+
+import pytest
 
 from rompy.core.responses import (
     ArtifactType,
@@ -68,6 +71,64 @@ def test_context_and_step_use_concrete_typed_handoff(tmp_path):
     assert isinstance(result, PostprocessSuccess)
     assert next_context.artifacts == tuple(result.artifacts)
     assert next_context.failure_policy is PostprocessFailurePolicy.CONTINUE
+
+
+def test_operational_state_snapshots_input_and_nested_values(tmp_path):
+    nested = {"attempt": 1, "items": [{"ready": True}]}
+    state = {"example": nested}
+    context = PostprocessContext.from_run_result(run_result(tmp_path), operational_state=state)
+
+    nested["items"][0]["ready"] = False
+    nested["items"].append({"late": True})
+    state["example"] = {"replaced": True}
+
+    assert context.namespace("example") == {
+        "attempt": 1,
+        "items": [{"ready": True}],
+    }
+    with pytest.raises(TypeError, match="immutable"):
+        context.namespace("example")["items"].append({"late": True})
+
+
+def test_operational_state_rejects_invalid_json_values_and_keys(tmp_path):
+    for value in (math.nan, math.inf, -math.inf, object(), {1: "not a string key"}):
+        with pytest.raises(ValueError, match="operational_state"):
+            PostprocessContext.from_run_result(
+                run_result(tmp_path), operational_state={"example": {"value": value}}
+            )
+
+    with pytest.raises(ValueError, match="namespace"):
+        PostprocessContext.from_run_result(
+            run_result(tmp_path), operational_state={"example": ["not a mapping"]}
+        )
+
+
+def test_state_update_and_handoff_are_immutable_and_isolated(tmp_path):
+    context = PostprocessContext.from_run_result(
+        run_result(tmp_path), operational_state={"example": {"attempt": 1}}
+    )
+    update = {"attempt": 2, "nested": {"ok": True}}
+    updated = context.with_state("example", update)
+    update["nested"]["ok"] = False
+
+    assert context.namespace("example") == {"attempt": 1}
+    assert updated.namespace("example") == {
+        "attempt": 2,
+        "nested": {"ok": True},
+    }
+    next_context = updated.handoff(
+        PostprocessSuccess(
+            run_id="protocol-run",
+            output_dir=str(tmp_path),
+            validated=True,
+            artifacts=[],
+            expected_outputs=[],
+            missing_outputs=[],
+            timing=TimingInfo(start_time=NOW, end_time=NOW),
+        )
+    )
+    assert next_context.namespace("example") == updated.namespace("example")
+    assert next_context.namespace("example") is not updated.namespace("example")
 
 
 def test_existing_single_processor_conforms_without_composition(tmp_path):

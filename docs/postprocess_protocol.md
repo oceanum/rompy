@@ -31,8 +31,11 @@ not implemented by this contract issue.
 - Steps own transformations and integrations only. They must not write a
   competing result sidecar. Artifacts returned by a step are evidence for the
   core handoff, not persistence instructions.
-- Operational state is non-canonical and namespaced by processor. It is for
-  bounded runtime state, not result or artifact authority.
+- Operational state is non-canonical, namespaced by processor, recursively
+  JSON-safe, and immutable. The core snapshots caller input; processors read a
+  namespace and call `context.with_state(name, values)` to receive a new
+  context with that namespace replaced. It is for bounded runtime state, not
+  result or artifact authority.
 - `FAIL_FAST` and `CONTINUE` describe the policy a future ordered runner will
   apply to a failed step; this issue does not implement that runner.
 
@@ -41,5 +44,7 @@ not implemented by this contract issue.
 Validated processor configurations are discovered only from the
 `rompy.postprocess.config` entry-point group. The sibling
 `rompy.postprocess` group is for runtime implementations and is not a config
-registry. Existing `NoopPostprocessorConfig` and single-processor
-`ModelRun.postprocess(...)` calls remain supported.
+registry. Discovery is sorted and rejects duplicate names with a deterministic
+ambiguity error rather than choosing metadata enumeration order. Existing
+`NoopPostprocessorConfig` and single-processor `ModelRun.postprocess(...)`
+calls remain supported.

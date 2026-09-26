@@ -16,6 +16,8 @@ from rompy.postprocess import (
 )
 from rompy.postprocess.config import (
     _load_processor_config,
+    _load_processor_config_from_dict,
+    _processor_config_entry_points,
     validate_postprocessor_config,
 )
 from rompy.core.responses import (
@@ -134,6 +136,70 @@ class TestLoadProcessorConfig:
 
         with pytest.raises(ValueError, match="Unknown processor type"):
             _load_processor_config(config_file)
+
+
+class _FakeEntryPoint:
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
+
+    def load(self):
+        return NoopPostprocessorConfig
+
+
+class _ModernEntryPoints(list):
+    def select(self, *, group):
+        assert group == "rompy.postprocess.config"
+        return self
+
+
+class TestConfigEntryPointDiscovery:
+    def test_reversed_duplicate_names_raise_deterministically(self, monkeypatch, tmp_path):
+        entries = _ModernEntryPoints(
+            [
+                _FakeEntryPoint("duplicate", "provider-b:Config"),
+                _FakeEntryPoint("duplicate", "provider-a:Config"),
+            ]
+        )
+        monkeypatch.setattr("importlib.metadata.entry_points", lambda: entries)
+
+        with pytest.raises(ValueError) as first:
+            _load_processor_config_from_dict({"type": "duplicate"})
+        monkeypatch.setattr(
+            "importlib.metadata.entry_points",
+            lambda: _ModernEntryPoints(list(reversed(entries))),
+        )
+        config_file = tmp_path / "duplicate.yml"
+        config_file.write_text("type: duplicate\n")
+        with pytest.raises(ValueError) as second:
+            _load_processor_config(config_file)
+
+        assert str(first.value) == str(second.value)
+        assert "duplicate" in str(first.value)
+        assert "provider-a:Config" in str(first.value)
+        assert "provider-b:Config" in str(first.value)
+
+    @pytest.mark.parametrize("legacy_shape", ["dict", "group_argument"])
+    def test_legacy_duplicate_names_raise(self, monkeypatch, legacy_shape):
+        entries = [
+            _FakeEntryPoint("duplicate", "provider-b:Config"),
+            _FakeEntryPoint("duplicate", "provider-a:Config"),
+        ]
+        if legacy_shape == "dict":
+            monkeypatch.setattr(
+                "importlib.metadata.entry_points",
+                lambda: {"rompy.postprocess.config": entries},
+            )
+        else:
+            def legacy_entry_points(*, group=None):
+                if group is None:
+                    raise TypeError("group is required")
+                return entries
+
+            monkeypatch.setattr("importlib.metadata.entry_points", legacy_entry_points)
+
+        with pytest.raises(ValueError, match="Ambiguous postprocessor config"):
+            _processor_config_entry_points()
 
 
 class TestValidatePostprocessorConfig:

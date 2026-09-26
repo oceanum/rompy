@@ -134,6 +134,33 @@ class NoopPostprocessorConfig(BasePostprocessorConfig):
 ProcessorConfig = Union[NoopPostprocessorConfig]
 
 
+_PROCESSOR_CONFIG_GROUP = "rompy.postprocess.config"
+
+
+def _entry_point_provider_identity(entry_point) -> str:
+    """Return a stable provider identity for ambiguity diagnostics."""
+    distribution = getattr(entry_point, "dist", None)
+    distribution_name = getattr(distribution, "name", None)
+    if distribution_name is None and distribution is not None:
+        metadata = getattr(distribution, "metadata", None)
+        if metadata is not None:
+            distribution_name = metadata.get("Name")
+    target = getattr(entry_point, "value", None)
+    if distribution_name and target:
+        return f"{distribution_name} ({target})"
+    if distribution_name:
+        return str(distribution_name)
+    if target:
+        return str(target)
+    module = getattr(entry_point, "module", None)
+    attr = getattr(entry_point, "attr", None)
+    if module and attr:
+        return f"{module}:{attr}"
+    if module:
+        return str(module)
+    return type(entry_point).__module__ + "." + type(entry_point).__qualname__
+
+
 def _processor_config_entry_points():
     """Return deterministic config entry points from the canonical group.
 
@@ -141,20 +168,47 @@ def _processor_config_entry_points():
     classes. The sibling ``rompy.postprocess`` group contains runtime
     implementations and is not consulted as a config registry. Compatibility
     branches support both modern and legacy ``importlib.metadata`` APIs.
+    Duplicate names are rejected rather than resolved by metadata enumeration
+    order.
     """
     from importlib.metadata import entry_points
 
     try:
         discovered = entry_points()
     except TypeError:  # pragma: no cover - legacy implementations
-        discovered = entry_points(group="rompy.postprocess.config")
+        discovered = entry_points(group=_PROCESSOR_CONFIG_GROUP)
     if hasattr(discovered, "select"):
-        selected = discovered.select(group="rompy.postprocess.config")
+        selected = discovered.select(group=_PROCESSOR_CONFIG_GROUP)
     elif isinstance(discovered, dict):  # pragma: no cover - Python 3.9 API
-        selected = discovered.get("rompy.postprocess.config", ())
+        selected = discovered.get(_PROCESSOR_CONFIG_GROUP, ())
     else:
         selected = discovered
-    return tuple(sorted(selected, key=lambda item: item.name))
+    selected = tuple(selected)
+
+    by_name = {}
+    for entry_point in selected:
+        by_name.setdefault(entry_point.name, []).append(entry_point)
+    duplicates = {
+        name: sorted(_entry_point_provider_identity(ep) for ep in entry_points)
+        for name, entry_points in by_name.items()
+        if len(entry_points) > 1
+    }
+    if duplicates:
+        details = "; ".join(
+            f"{name}: {', '.join(providers)}"
+            for name, providers in sorted(duplicates.items())
+        )
+        raise ValueError(
+            "Ambiguous postprocessor config entry point names; "
+            f"duplicate providers ({details})"
+        )
+
+    return tuple(
+        sorted(
+            selected,
+            key=lambda item: (item.name, _entry_point_provider_identity(item)),
+        )
+    )
 
 
 def _load_processor_config(config_file):

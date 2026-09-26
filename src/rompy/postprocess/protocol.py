@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import Enum
+import math
 from pathlib import Path
 from typing import Mapping, Protocol, TypeAlias, runtime_checkable
 
@@ -30,6 +31,72 @@ PostprocessResultValue: TypeAlias = PostprocessSuccess | PostprocessFailure
 JSONScalar: TypeAlias = str | int | float | bool | None
 JSONValue: TypeAlias = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 OperationalState: TypeAlias = Mapping[str, Mapping[str, JSONValue]]
+
+
+class _ImmutableDict(dict[str, JSONValue]):
+    """JSON object snapshot that preserves dict behaviour without mutation."""
+
+    def _immutable(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("postprocess operational state is immutable")
+
+    __delitem__ = __setitem__ = clear = pop = popitem = setdefault = update = _immutable
+    __ior__ = _immutable
+
+
+class _ImmutableList(list[JSONValue]):
+    """JSON array snapshot that preserves list behaviour without mutation."""
+
+    def _immutable(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("postprocess operational state is immutable")
+
+    __delitem__ = __setitem__ = __iadd__ = __imul__ = _immutable
+    append = clear = extend = insert = pop = remove = reverse = sort = _immutable
+
+
+def _validated_json_value(value: object, path: str) -> JSONValue:
+    """Validate and recursively snapshot one JSON-compatible value."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"operational_state value at {path} must be finite")
+        return value
+    if isinstance(value, Mapping):
+        snapshot: _ImmutableDict = _ImmutableDict()
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"operational_state object key at {path} must be a string"
+                )
+            dict.__setitem__(
+                snapshot, key, _validated_json_value(nested, f"{path}.{key}")
+            )
+        return snapshot
+    if isinstance(value, list):
+        snapshot: _ImmutableList = _ImmutableList()
+        for index, nested in enumerate(value):
+            list.append(snapshot, _validated_json_value(nested, f"{path}[{index}]"))
+        return snapshot
+    raise ValueError(
+        f"operational_state value at {path} is not JSON-safe: {type(value).__name__}"
+    )
+
+
+def _snapshot_operational_state(state: object) -> OperationalState:
+    """Validate and recursively copy namespaced operational state."""
+    if not isinstance(state, Mapping):
+        raise ValueError("operational_state must be a mapping of namespaces")
+    snapshot: _ImmutableDict = _ImmutableDict()
+    for namespace, values in state.items():
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ValueError("operational_state namespaces must be non-empty strings")
+        if not isinstance(values, Mapping):
+            raise ValueError(
+                f"operational_state namespace {namespace!r} must be a mapping"
+            )
+        validated = _validated_json_value(values, f"namespace {namespace!r}")
+        dict.__setitem__(snapshot, namespace, validated)
+    return snapshot
 
 
 class PostprocessFailurePolicy(str, Enum):
@@ -53,11 +120,13 @@ class PostprocessContext:
     new context from each validated step result with :meth:`handoff`; steps do
     not mutate or replace another step's evidence.
 
-    ``operational_state`` is an intentionally non-canonical, namespaced
-    mapping.  A processor may read its own namespace and return updated state
-    to a future runner, but it must not use this mapping as a result sidecar or
-    write ``postprocess_result.json``.  The core runner owns failure handling,
-    final result construction, and the one canonical sidecar.
+    ``operational_state`` is an intentionally non-canonical, namespaced,
+    recursively immutable JSON-safe mapping.  A processor reads its own
+    namespace and uses :meth:`with_state` to request an immutable context with
+    updated state; processors do not mutate a context in place.  State is not a
+    result sidecar, and processors must not write ``postprocess_result.json``.
+    The core runner owns failure handling, final result construction, and the
+    one canonical sidecar.
     """
 
     run_result: ModelRunResultValue
@@ -70,7 +139,7 @@ class PostprocessContext:
     operational_state: OperationalState = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate the public boundary and snapshot evidence collections."""
+        """Validate the public boundary and snapshot all mutable inputs."""
         validated_run = TypeAdapter(ModelRunResult).validate_python(self.run_result)
         object.__setattr__(self, "run_result", validated_run)
         adapter = TypeAdapter(ArtifactIdentity)
@@ -85,11 +154,9 @@ class PostprocessContext:
                 "failure_policy",
                 PostprocessFailurePolicy(self.failure_policy),
             )
-        if any(
-            not isinstance(namespace, str) or not namespace.strip()
-            for namespace in self.operational_state
-        ):
-            raise ValueError("operational_state namespaces must be non-empty strings")
+        object.__setattr__(
+            self, "operational_state", _snapshot_operational_state(self.operational_state)
+        )
 
     @classmethod
     def from_run_result(
@@ -121,10 +188,27 @@ class PostprocessContext:
         )
 
     def namespace(self, name: str) -> Mapping[str, JSONValue]:
-        """Return one processor-owned operational-state namespace."""
+        """Return one immutable processor-owned operational-state namespace."""
         if not isinstance(name, str) or not name.strip():
             raise ValueError("operational-state namespace must be a non-empty string")
-        return self.operational_state.get(name, {})
+        return self.operational_state.get(name, _ImmutableDict())
+
+    def with_state(
+        self, namespace: str, values: Mapping[str, JSONValue]
+    ) -> "PostprocessContext":
+        """Return a new context with one processor namespace replaced.
+
+        State updates are core-owned and immutable: the supplied mapping is
+        validated and copied, and neither this context nor the returned context
+        can be changed through the state mapping.  Other namespaces are kept.
+        """
+        if not isinstance(namespace, str) or not namespace.strip():
+            raise ValueError("operational-state namespace must be a non-empty string")
+        if not isinstance(values, Mapping):
+            raise ValueError("operational-state namespace values must be a mapping")
+        state = dict(self.operational_state)
+        state[namespace] = values
+        return replace(self, operational_state=state)
 
     def handoff(self, result: PostprocessResultValue) -> "PostprocessContext":
         """Create the next ordered-step context from a concrete step result.
@@ -142,6 +226,7 @@ class PostprocessContext:
             artifacts=tuple(validated.artifacts),
             expected_outputs=tuple(validated.expected_outputs),
             missing_outputs=tuple(validated.missing_outputs),
+            operational_state=dict(self.operational_state),
         )
 
 
