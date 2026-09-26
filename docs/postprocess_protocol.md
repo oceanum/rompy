@@ -18,10 +18,10 @@ class CheckStep:
 
 A context contains one concrete `ModelRunSuccess` or `ModelRunFailure`,
 observed artifact evidence, separate expected/missing evidence, a failure
-policy, and namespaced operational state. `context.handoff(result)` is the
-future ordered-step handoff: it validates the concrete result and carries its
-observed artifacts to the next context. Ordered composition and execution are
-not implemented by this contract issue.
+policy, and namespaced operational state. `context.handoff(result)` validates
+the concrete result and carries its observed artifacts to the next context.
+`PostprocessPipelineConfig` and `run_postprocess_pipeline` provide ordered
+composition while keeping this typed handoff contract small.
 
 ## Ownership rules
 
@@ -36,8 +36,8 @@ not implemented by this contract issue.
   namespace and call `context.with_state(name, values)` to receive a new
   context with that namespace replaced. It is for bounded runtime state, not
   result or artifact authority.
-- `FAIL_FAST` and `CONTINUE` describe the policy a future ordered runner will
-  apply to a failed step; this issue does not implement that runner.
+- `FAIL_FAST` records remaining steps as unattempted; `CONTINUE` attempts
+  later steps and retains primary/secondary failure evidence.
 
 ## Configuration discovery
 
