@@ -37,8 +37,13 @@ canonical sidecars, or persist credentials. Plugin projects can use
 `rompy.postprocess.conformance.assert_step_conforms` in their own tests.
 
 The built-in transfer processor (#16) is model-neutral: it filters canonical
-artifacts, fans out to destinations, records checksums/request identities and
-safe retry evidence, and defaults to the source basename. Model-specific
-naming remains an injectable strategy outside core. These contracts are part of
+artifacts, computes an explicit source checksum for every pair, and records a
+redacted replay identity. Signed destination URLs are retained only for the
+live transfer call; userinfo, query strings, and fragments are absent from
+metadata, diagnostics, replay keys, and incremental state. Successful pairs
+are persisted under a validated one-component namespace below
+`.rompy-postprocess`, so a fresh retry skips them without duplicate uploads or
+count inflation. The processor defaults to the source basename and keeps
+model-specific naming injectable outside core. These contracts are part of
 the composable postprocessing epic (#12, #15, #16, #17); no WW3 or Zarr
 integration is included.

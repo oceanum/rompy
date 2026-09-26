@@ -7,9 +7,9 @@ written.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
 
 from pydantic import TypeAdapter
 
@@ -21,6 +21,7 @@ from rompy.core.responses import (
     TimingInfo,
 )
 from rompy.core.result_persistence import persist_result
+
 from .protocol import (
     PostprocessContext,
     PostprocessFailurePolicy,
@@ -81,11 +82,23 @@ def run_postprocess_pipeline(
             evidence.append(_evidence(name, "unattempted"))
             continue
         try:
-            # Legacy processors remain valid composition members through this
-            # narrow adapter; context-aware plugins receive the full context.
-            value = step.process(context) if hasattr(step, "name") else step.process(context.run_result)
+            # Dispatch is explicit: context-capable processors advertise the
+            # context protocol, while legacy processors use their adapter or
+            # receive the validated run result.  The plugin's display name is
+            # never used to infer its input type.
+            if getattr(step, "input_protocol", None) == "model_run_result":
+                value = step.process(context.run_result)
+            elif getattr(step, "input_protocol", None) == "context":
+                value = step.process(context)
+            elif callable(getattr(step, "process_context", None)):
+                value = step.process_context(context)
+            elif isinstance(step, PostprocessStep):
+                value = step.process(context)
+            else:
+                adapter = getattr(step, "process_legacy", None)
+                value = adapter(context.run_result) if callable(adapter) else step.process(context.run_result)
             current = TypeAdapter(PostprocessResult).validate_python(value)
-        except Exception as exc:  # boundary errors are durable evidence
+        except Exception as exc:  # noqa: BLE001 - plugin boundary evidence
             message = _message(exc, f"postprocess step {name} failed")
             current = PostprocessFailure(
                 run_id=context.run_result.run_id,

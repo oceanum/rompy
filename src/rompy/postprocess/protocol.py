@@ -8,11 +8,13 @@ without giving a step filesystem or sidecar ownership.
 
 from __future__ import annotations
 
+import math
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
-import math
 from pathlib import Path
-from typing import Iterable, Mapping, Protocol, TypeAlias, runtime_checkable
+from typing import Protocol, TypeAlias, runtime_checkable
 
 from pydantic import TypeAdapter
 
@@ -67,7 +69,7 @@ def _validated_json_value(value: object, path: str) -> JSONValue:
         snapshot: _ImmutableDict = _ImmutableDict()
         for key, nested in value.items():
             if not isinstance(key, str):
-                raise ValueError(
+                raise ValueError(  # noqa: TRY004 - public JSON validation uses ValueError
                     f"operational_state object key at {path} must be a string"
                 )
             dict.__setitem__(
@@ -84,16 +86,29 @@ def _validated_json_value(value: object, path: str) -> JSONValue:
     )
 
 
+_SAFE_NAMESPACE = re.compile(r"[A-Za-z0-9_-]+\Z")
+
+
+def validate_state_namespace(namespace: str) -> str:
+    """Validate one filesystem-safe operational-state path component."""
+    if not isinstance(namespace, str) or not _SAFE_NAMESPACE.fullmatch(namespace):
+        raise ValueError(
+            "operational_state state_namespace must be one safe path component "
+            "containing only letters, digits, '_' or '-'")
+    return namespace
+
+
 def _snapshot_operational_state(state: object) -> OperationalState:
     """Validate and recursively copy namespaced operational state."""
     if not isinstance(state, Mapping):
-        raise ValueError("operational_state must be a mapping of namespaces")
+        raise ValueError(  # noqa: TRY004 - public JSON validation uses ValueError
+            "operational_state must be a mapping of namespaces"
+        )
     snapshot: _ImmutableDict = _ImmutableDict()
     for namespace, values in state.items():
-        if not isinstance(namespace, str) or not namespace.strip():
-            raise ValueError("operational_state namespaces must be non-empty strings")
+        validate_state_namespace(namespace)
         if not isinstance(values, Mapping):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004 - public JSON validation uses ValueError
                 f"operational_state namespace {namespace!r} must be a mapping"
             )
         validated = _validated_json_value(values, f"namespace {namespace!r}")
@@ -168,7 +183,7 @@ class PostprocessContext:
         staging_dir: Path | str | None = None,
         failure_policy: PostprocessFailurePolicy = PostprocessFailurePolicy.FAIL_FAST,
         operational_state: OperationalState | None = None,
-    ) -> "PostprocessContext":
+    ) -> PostprocessContext:
         """Build initial context from a concrete validated run result.
 
         Existing run-stage evidence is copied into immutable tuples.  This is
@@ -191,23 +206,23 @@ class PostprocessContext:
 
     def namespace(self, name: str) -> Mapping[str, JSONValue]:
         """Return one immutable processor-owned operational-state namespace."""
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("operational-state namespace must be a non-empty string")
+        validate_state_namespace(name)
         return self.operational_state.get(name, _ImmutableDict())
 
     def with_state(
         self, namespace: str, values: Mapping[str, JSONValue]
-    ) -> "PostprocessContext":
+    ) -> PostprocessContext:
         """Return a new context with one processor namespace replaced.
 
         State updates are core-owned and immutable: the supplied mapping is
         validated and copied, and neither this context nor the returned context
         can be changed through the state mapping.  Other namespaces are kept.
         """
-        if not isinstance(namespace, str) or not namespace.strip():
-            raise ValueError("operational-state namespace must be a non-empty string")
+        validate_state_namespace(namespace)
         if not isinstance(values, Mapping):
-            raise ValueError("operational-state namespace values must be a mapping")
+            raise ValueError(  # noqa: TRY004 - public JSON validation uses ValueError
+                "operational-state namespace values must be a mapping"
+            )
         state = dict(self.operational_state)
         state[namespace] = values
         return replace(self, operational_state=state)
@@ -231,7 +246,7 @@ class PostprocessContext:
             artifact_types=artifact_types,
         )
 
-    def handoff(self, result: PostprocessResultValue) -> "PostprocessContext":
+    def handoff(self, result: PostprocessResultValue) -> PostprocessContext:
         """Create the next ordered-step context from a concrete step result.
 
         The core boundary validates the returned discriminated union before
@@ -285,10 +300,10 @@ PostprocessorProtocol = PostprocessProcessor
 ProcessorProtocol = PostprocessProcessor
 
 __all__ = [
+    "ArtifactReconciliation",
     "FailurePolicy",
     "JSONValue",
     "OperationalState",
-    "ArtifactReconciliation",
     "PostprocessContext",
     "PostprocessFailurePolicy",
     "PostprocessProcessor",
@@ -297,4 +312,5 @@ __all__ = [
     "PostprocessStepProtocol",
     "PostprocessorProtocol",
     "ProcessorProtocol",
+    "validate_state_namespace",
 ]

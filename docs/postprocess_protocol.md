@@ -1,20 +1,49 @@
 # Postprocessor protocol
 
-ROMPy exposes a typed contract for postprocessing without requiring a
-composition runtime. Import `PostprocessContext`, `PostprocessStep`, and
+ROMPy exposes a typed contract for postprocessing and an ordered composition
+runtime. Import `PostprocessContext`, `PostprocessStep`, and
 `PostprocessProcessor` from `rompy.postprocess`.
 
 ```python
-from rompy.postprocess import PostprocessContext, PostprocessStep
-from rompy.core.responses import PostprocessResult
+from datetime import datetime, timezone
+
+from rompy.core.responses import (
+    ArtifactType,
+    LocalArtifact,
+    PostprocessSuccess,
+    TimingInfo,
+)
+from rompy.postprocess import PostprocessContext
 
 class CheckStep:
     name = "check"
+    input_protocol = "context"  # explicit capability dispatch
 
-    def process(self, context: PostprocessContext) -> PostprocessResult:
-        # Return a concrete PostprocessSuccess or PostprocessFailure.
-        ...
+    def process(self, context: PostprocessContext) -> PostprocessSuccess:
+        now = datetime.now(timezone.utc)
+        artifact = LocalArtifact(path="checked.txt", artifact_type=ArtifactType.TEXT)
+        return PostprocessSuccess(
+            run_id=context.run_result.run_id,
+            output_dir=str(context.output_dir or ""),
+            validated=True,
+            artifacts=list(context.artifacts) + [artifact],
+            expected_outputs=list(context.expected_outputs),
+            missing_outputs=list(context.missing_outputs),
+            file_count=1,
+            message="checked outputs",
+            timing=TimingInfo(start_time=now, end_time=datetime.now(timezone.utc)),
+        )
 ```
+
+A standalone processor receives the typed result through the same public seam:
+
+```python
+result = model_run.postprocess(config, processor_input=run_result)
+```
+
+`processor_input` is a concrete `ModelRunSuccess` or `ModelRunFailure`, and
+all v2 result constructors require `run_id`, typed artifact evidence, and
+`TimingInfo`. Use `model_dump(mode="json")` for Pydantic v2 serialization.
 
 A context contains one concrete `ModelRunSuccess` or `ModelRunFailure`,
 observed artifact evidence, separate expected/missing evidence, a failure

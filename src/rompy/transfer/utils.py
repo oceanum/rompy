@@ -3,6 +3,17 @@ from __future__ import annotations
 from urllib.parse import urlparse, urlunparse
 
 
+def redact_uri(uri: str) -> str:
+    """Return a URI identity without userinfo, query credentials, or fragments."""
+    parsed = urlparse(str(uri))
+    if not parsed.scheme:
+        return str(uri).split("#", 1)[0].split("?", 1)[0]
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return urlunparse((parsed.scheme.lower(), host, parsed.path, "", "", ""))
+
+
 def parse_scheme(uri: str) -> str:
     """
     Return the lower-cased scheme for a URI.

@@ -29,19 +29,28 @@ from .config import (
     PostprocessPipelineConfig,
     ProcessorConfig,
 )
-from .runner import PostprocessPipelineRunner, compose_postprocessors, run_postprocess_pipeline
-from .transfer import TransferPostprocessor, TransferPostprocessorConfig, normalize_destination
 from .conformance import assert_no_sidecar_ownership, assert_step_conforms
 from .protocol import (
     ArtifactReconciliation,
     FailurePolicy,
     PostprocessContext,
     PostprocessFailurePolicy,
+    PostprocessorProtocol,
     PostprocessProcessor,
     PostprocessStep,
     PostprocessStepProtocol,
-    PostprocessorProtocol,
     ProcessorProtocol,
+    validate_state_namespace,
+)
+from .runner import (
+    PostprocessPipelineRunner,
+    compose_postprocessors,
+    run_postprocess_pipeline,
+)
+from .transfer import (
+    TransferPostprocessor,
+    TransferPostprocessorConfig,
+    normalize_destination,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,27 +64,28 @@ def _exception_message(error: BaseException, fallback: str) -> str:
 
 __all__ = [
     "ArtifactReconciliation",
+    "BasePostprocessorConfig",
+    "FailurePolicy",
     "NoopPostprocessor",
     "NoopPostprocessorConfig",
-    "PostprocessPipelineConfig",
-    "TransferPostprocessor",
-    "TransferPostprocessorConfig",
-    "normalize_destination",
-    "BasePostprocessorConfig",
-    "ProcessorConfig",
-    "FailurePolicy",
     "PostprocessContext",
     "PostprocessFailurePolicy",
+    "PostprocessPipelineConfig",
+    "PostprocessPipelineRunner",
     "PostprocessProcessor",
     "PostprocessStep",
     "PostprocessStepProtocol",
     "PostprocessorProtocol",
+    "ProcessorConfig",
     "ProcessorProtocol",
-    "PostprocessPipelineRunner",
-    "compose_postprocessors",
-    "run_postprocess_pipeline",
-    "assert_step_conforms",
+    "TransferPostprocessor",
+    "TransferPostprocessorConfig",
     "assert_no_sidecar_ownership",
+    "assert_step_conforms",
+    "compose_postprocessors",
+    "normalize_destination",
+    "run_postprocess_pipeline",
+    "validate_state_namespace",
 ]
 
 

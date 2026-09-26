@@ -818,7 +818,10 @@ class ModelRun(RompyBaseModel):
                 # Serialize to dict for logging or storage
                 result_dict = result.model_dump()
         """
-        from rompy.postprocess.config import BasePostprocessorConfig, PostprocessPipelineConfig
+        from rompy.postprocess.config import (
+            BasePostprocessorConfig,
+            PostprocessPipelineConfig,
+        )
 
         start_time = datetime.now(timezone.utc)
 
@@ -847,7 +850,22 @@ class ModelRun(RompyBaseModel):
             processor_instance = processor.build_processor()
             # Options are explicit process options, never flattened constructor state.
             process_options = dict(kwargs)
-            result = processor_instance.process(run_result, **process_options)
+            legacy_adapter = getattr(processor_instance, "process_legacy", None)
+            if callable(legacy_adapter):
+                # Built-ins such as transfer expose this seam because their
+                # composable API consumes PostprocessContext.
+                process_options.setdefault("staging_dir", self.staging_dir)
+                result = legacy_adapter(run_result, **process_options)
+            elif getattr(processor_instance, "input_protocol", None) == "context":
+                from rompy.postprocess.protocol import PostprocessContext
+                context = PostprocessContext.from_run_result(
+                    run_result, staging_dir=self.staging_dir
+                )
+                result = processor_instance.process(context, **process_options)
+            else:
+                # Unmarked plugins are the legacy public ModelRunResult seam;
+                # their class or entry-point name is not part of dispatch.
+                result = processor_instance.process(run_result, **process_options)
             if not isinstance(result, (PostprocessSuccess, PostprocessFailure)):
                 raise TypeError("processor output must be a concrete PostprocessSuccess or PostprocessFailure")
             result = TypeAdapter(PostprocessResult).validate_python(result)
