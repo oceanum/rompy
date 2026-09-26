@@ -5,8 +5,6 @@ This module tests the postprocessor config classes, loading, and validation.
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 import yaml
@@ -19,6 +17,10 @@ from rompy.postprocess import (
 from rompy.postprocess.config import (
     _load_processor_config,
     validate_postprocessor_config,
+)
+from rompy.core.responses import (
+    PostprocessSuccess,
+    PostprocessFailure,
 )
 
 
@@ -213,7 +215,8 @@ class TestModelRunIntegration:
         config = NoopPostprocessorConfig(validate_outputs=False)
         # Should not raise TypeError
         result = model.postprocess(config)
-        assert isinstance(result, dict)
+        # Result is now PostprocessResult type, not dict
+        assert isinstance(result, (PostprocessSuccess, PostprocessFailure))
 
     def test_postprocess_rejects_string(self):
         """Test that ModelRun.postprocess rejects string processor names."""
@@ -230,5 +233,8 @@ class TestModelRunIntegration:
             ),
         )
 
-        with pytest.raises(TypeError, match="BasePostprocessorConfig"):
-            model.postprocess("noop")
+        # New behavior: returns PostprocessFailure instead of raising TypeError
+        result = model.postprocess("noop")
+        assert isinstance(result, PostprocessFailure)
+        assert not result.success
+        assert "BasePostprocessorConfig" in result.error
