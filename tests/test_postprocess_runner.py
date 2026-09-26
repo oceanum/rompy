@@ -41,6 +41,8 @@ def _run(tmp_path):
 
 
 class _Step:
+    input_protocol = "context"
+
     def __init__(self, name, fail=False):
         self.name = name
         self.fail = fail
@@ -142,6 +144,60 @@ def test_signed_url_is_live_only_and_fragments_are_not_evidence(monkeypatch, tmp
     assert all(secret not in state for secret in ("password", "secret-token", "X-Amz-Signature", "fragment"))
 
 
+def test_transfer_failure_redacts_decoded_query_and_fragment(monkeypatch, tmp_path):
+    import rompy.postprocess.transfer as transfer_module
+
+    destination = (
+        "https://user:password@example.test/archive?token=s%65cret"
+        "&signature=abc%2Fdef#frag%6Dent"
+    )
+    calls = []
+
+    class Destination:
+        def put(self, source, target):
+            calls.append(target)
+            raise RuntimeError(
+                "backend rejected token=secret signature=abc/def fragment=fragment"
+            )
+
+    monkeypatch.setattr(transfer_module, "get_transfer", lambda value: Destination())
+    processor = TransferPostprocessor(
+        TransferPostprocessorConfig(
+            destinations=[destination], artifact_types=[ArtifactType.TEXT]
+        )
+    )
+    result = run_postprocess_pipeline(
+        _run(tmp_path), [processor], staging_dir=tmp_path
+    )
+
+    assert not result.success
+    assert calls and "token=s%65cret" in calls[0]
+    evidence = result.model_dump_json()
+    assert all(
+        value not in evidence
+        for value in (
+            "s%65cret",
+            "secret",
+            "frag%6Dent",
+            "fragment",
+            "abc%2Fdef",
+            "abc/def",
+        )
+    )
+    persisted = (tmp_path / "postprocess_result.json").read_text()
+    assert all(
+        value not in persisted
+        for value in (
+            "s%65cret",
+            "secret",
+            "frag%6Dent",
+            "fragment",
+            "abc%2Fdef",
+            "abc/def",
+        )
+    )
+
+
 def test_successful_pairs_replay_from_disk_after_partial_failure(monkeypatch, tmp_path):
     import rompy.postprocess.transfer as transfer_module
 
@@ -183,10 +239,9 @@ def test_state_namespace_rejects_traversal_and_absolute_values():
             TransferPostprocessorConfig(destinations=["file:///tmp"], state_namespace=namespace)
 
 
-def test_named_legacy_plugin_uses_explicit_result_protocol(tmp_path):
+def test_unmarked_named_legacy_plugin_uses_result_protocol(tmp_path):
     class NamedLegacy:
         name = "named-legacy"
-        input_protocol = "model_run_result"
 
         def process(self, result):
             assert isinstance(result, ModelRunSuccess)

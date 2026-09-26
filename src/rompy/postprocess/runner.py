@@ -83,20 +83,22 @@ def run_postprocess_pipeline(
             continue
         try:
             # Dispatch is explicit: context-capable processors advertise the
-            # context protocol, while legacy processors use their adapter or
-            # receive the validated run result.  The plugin's display name is
-            # never used to infer its input type.
+            # context protocol or expose a dedicated context method.  Every
+            # other processor remains on the legacy ModelRunResult seam;
+            # structural name/process presence is not a context capability.
             if getattr(step, "input_protocol", None) == "model_run_result":
                 value = step.process(context.run_result)
             elif getattr(step, "input_protocol", None) == "context":
                 value = step.process(context)
             elif callable(getattr(step, "process_context", None)):
                 value = step.process_context(context)
-            elif isinstance(step, PostprocessStep):
-                value = step.process(context)
             else:
                 adapter = getattr(step, "process_legacy", None)
-                value = adapter(context.run_result) if callable(adapter) else step.process(context.run_result)
+                value = (
+                    adapter(context.run_result)
+                    if callable(adapter)
+                    else step.process(context.run_result)
+                )
             current = TypeAdapter(PostprocessResult).validate_python(value)
         except Exception as exc:  # noqa: BLE001 - plugin boundary evidence
             message = _message(exc, f"postprocess step {name} failed")

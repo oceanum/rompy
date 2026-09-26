@@ -4,12 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field, field_validator, model_validator
 
@@ -23,6 +22,7 @@ from rompy.core.responses import (
     TimingInfo,
 )
 from rompy.transfer.registry import get_transfer
+from rompy.transfer.utils import redact_error
 
 from .config import BasePostprocessorConfig
 from .protocol import (
@@ -30,8 +30,6 @@ from .protocol import (
     PostprocessFailurePolicy,
     validate_state_namespace,
 )
-
-_URL_WITH_SECRET = re.compile(r"\b(?:https?|s3|gs|az|file)://[^\s]+")
 
 
 def normalize_destination(destination: str) -> str:
@@ -73,28 +71,8 @@ def _join_live(destination: str, name: str) -> str:
 
 
 def _redact(value: object, destinations: tuple[str, ...], live_targets: tuple[str, ...] = ()) -> str:
-    """Remove known executable URL material from diagnostic text."""
-    text = str(value)
-    all_values = destinations + live_targets
-    for original in all_values:
-        clean = normalize_destination(original)
-        text = text.replace(original, clean)
-        parsed = urlsplit(original)
-        if parsed.username:
-            text = text.replace(unquote(parsed.username), "<redacted>")
-        if parsed.password:
-            text = text.replace(unquote(parsed.password), "<redacted>")
-        if parsed.query:
-            for component in parsed.query.split("&"):
-                if component:
-                    text = text.replace(component, "<redacted>")
-                    key, _, query_value = component.partition("=")
-                    text = text.replace(key, "<redacted>")
-                    if query_value:
-                        text = text.replace(query_value, "<redacted>")
-        if parsed.fragment:
-            text = text.replace(parsed.fragment, "<redacted>")
-    return _URL_WITH_SECRET.sub(lambda match: normalize_destination(match.group(0)), text)
+    """Remove raw and percent-decoded URL credentials from diagnostics."""
+    return redact_error(value, *(destinations + live_targets))
 
 
 def _remote_evidence(uri: str, artifact_type: ArtifactType | None):

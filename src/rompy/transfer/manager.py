@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 
 from .registry import get_transfer
-from .utils import join_prefix, redact_uri
+from .utils import join_prefix, redact_error, redact_uri
 
 logger = logging.getLogger(__name__)
 
@@ -155,8 +155,9 @@ class TransferManager:
                     logger.info("Transfer succeeded for %s", evidence_uri)
 
                 except Exception as e:
-                    error_msg = f"{type(e).__name__}: {e!s}"
-                    error_msg = error_msg.replace(dest_uri, evidence_uri).replace(dest_prefix, evidence_prefix)
+                    error_msg = redact_error(
+                        f"{type(e).__name__}: {e!s}", dest_prefix, dest_uri
+                    )
                     logger.error("Transfer failed for %s: %s", evidence_uri, error_msg)
 
                     items.append(
