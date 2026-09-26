@@ -148,7 +148,7 @@ def _safe_optional_string(value: Any) -> str | None:
 
 
 def _safe_required_string(value: Any, default: str = "unknown") -> str:
-    return value if isinstance(value, str) and value else default
+    return value if isinstance(value, str) and value.strip() else default
 
 
 def _safe_timing(value: Any) -> TimingInfo:
@@ -311,12 +311,14 @@ def persist_result(
         if raw_primary_error is None:
             raw_primary_error = getattr(result, "error", None)
         safe_primary_error = (
-            raw_primary_error if isinstance(raw_primary_error, str) else None
+            _safe_required_string(raw_primary_error)
+            if isinstance(raw_primary_error, str)
+            else None
         )
         diagnostic = PersistenceDiagnostic(
             sidecar_kind=sidecar.kind,
             sidecar_path=str(sidecar_path),
-            error=str(exc),
+            error=_safe_required_string(str(exc), "result persistence failed"),
             primary_error=safe_primary_error,
         )
         return _failure_with_diagnostic(result, diagnostic, safe_primary_error)

@@ -14,9 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
-from pydantic import TypeAdapter
-
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
 from rompy.backends import BackendConfig
 from rompy.backends.config import BaseBackendConfig
@@ -32,11 +30,11 @@ from rompy.core.responses import (
     NormalizedContext,
     PipelineResult,
     PostprocessFailure,
-    PostprocessSuccess,
     PostprocessResult,
     PostprocessResultSidecar,
-    TimingInfo,
+    PostprocessSuccess,
     RunResultSidecar,
+    TimingInfo,
 )
 from rompy.core.time import TimeRange
 from rompy.core.types import RompyBaseModel
@@ -103,6 +101,20 @@ def _make_model_run_result(**data):
     elif not data.get("error"):
         data["error"] = "model execution failed"
     return variant(**data)
+
+
+def _backend_metadata(backend: BaseBackendConfig) -> dict[str, Any]:
+    """Return only non-sensitive backend metadata for persisted results.
+
+    Backend configuration contains arbitrary environment variables and, for
+    Docker, arbitrary build arguments.  Neither is safe to persist because the
+    values may contain credentials.  Keep the stable type and resource limit
+    useful to consumers without copying execution configuration wholesale.
+    """
+    return {
+        "type": type(backend).__name__,
+        "timeout": backend.timeout,
+    }
 
 
 class ModelRun(RompyBaseModel):
@@ -230,56 +242,32 @@ class ModelRun(RompyBaseModel):
         """
         start_time = datetime.now(timezone.utc)
         # Import formatting utilities
-        from rompy.formatting import format_table_row, log_box
+        from rompy.formatting import log_box
 
-        # Format model settings in a structured way
+        # Keep presentation independent from the structured values used below.
+        # Parsing rendered rows is incorrect in ASCII mode (which uses ``|``
+        # rather than the Unicode ``┃`` separator).
         config_type = type(self.config).__name__
         duration = self.period.end - self.period.start
         formatted_duration = self.period.format_duration(duration)
 
-        # Create table rows for the model run info
         rows = [
-            format_table_row("Run ID", str(self.run_id)),
-            format_table_row("Model Type", config_type),
-            format_table_row("Start Time", self.period.start.isoformat()),
-            format_table_row("End Time", self.period.end.isoformat()),
-            format_table_row("Duration", formatted_duration),
-            format_table_row("Time Interval", str(self.period.interval)),
-            format_table_row("Output Directory", str(self.output_dir)),
+            ("Run ID", str(self.run_id)),
+            ("Model Type", config_type),
+            ("Start Time", self.period.start.isoformat()),
+            ("End Time", self.period.end.isoformat()),
+            ("Duration", formatted_duration),
+            ("Time Interval", str(self.period.interval)),
+            ("Output Directory", str(self.output_dir)),
         ]
 
-        # Add description if available
         if hasattr(self.config, "description") and self.config.description:
-            rows.append(format_table_row("Description", self.config.description))
+            rows.append(("Description", self.config.description))
 
-        # Create a formatted table with proper alignment
-        formatted_rows = []
-        key_lengths = []
-
-        # First pass: collect all valid rows and calculate max key length
-        for row in rows:
-            try:
-                # Split the row by the box-drawing vertical line character
-                parts = [p.strip() for p in row.split("┃") if p.strip()]
-                if len(parts) >= 2:  # We expect at least key and value parts
-                    key = parts[0].strip()
-                    value = parts[1].strip() if len(parts) > 1 else ""
-                    key_lengths.append(len(key))
-                    formatted_rows.append((key, value))
-            except Exception as e:
-                logger.warning(f"Error processing row '{row}': {e}")
-
-        if not formatted_rows:
-            logger.warning("No valid rows found for model run configuration table")
-            return self._staging_dir
-
-        max_key_len = max(key_lengths) if key_lengths else 0
-
-        # Format the rows with proper alignment
-        aligned_rows = []
-        for key, value in formatted_rows:
-            aligned_row = f"{key:>{max_key_len}} : {value}"
-            aligned_rows.append(aligned_row)
+        max_key_len = max(len(key) for key, _ in rows)
+        aligned_rows = [
+            f"{key:>{max_key_len}} : {value}" for key, value in rows
+        ]
 
         # Log the box with the model run info
         log_box(title="MODEL RUN CONFIGURATION", logger=logger, add_empty_line=False)
@@ -670,7 +658,7 @@ class ModelRun(RompyBaseModel):
                     end_time=datetime.now(timezone.utc),
                 ),
                 metadata={
-                    "backend_config": backend.model_dump(mode="json", exclude_none=True),
+                    "backend_config": _backend_metadata(backend),
                     **({"generate_result": generation_failure.model_dump(mode="json")} if isinstance(generation_failure, GenerateFailure) else {}),
                     **({"normalized_context": run_context.model_dump(mode="json")} if run_context is not None else {}),
                 },

@@ -9,11 +9,18 @@ from pydantic import TypeAdapter, ValidationError
 from rompy.core import result_persistence
 from rompy.core.responses import (
     ArtifactIdentity,
+    GenerateFailure,
+    GenerateResult,
     LocalArtifact,
     ModelRunFailure,
     ModelRunResult,
     ModelRunSuccess,
     PersistenceDiagnostic,
+    PipelineFailure,
+    PipelineResult,
+    PipelineStage,
+    PostprocessFailure,
+    PostprocessResult,
     RemoteArtifact,
     RunResultSidecar,
     TimingInfo,
@@ -112,6 +119,69 @@ def test_replace_failure_cleans_temp_and_preserves_previous(tmp_path, monkeypatc
         result_persistence.write_run_result(tmp_path, sidecar)
     assert path.read_bytes() == previous
     assert list(tmp_path.glob(".*run_result.json.*")) == []
+
+
+def test_failure_variants_require_non_empty_errors():
+    generate = GenerateFailure(
+        run_id="run-42",
+        error="generation failed",
+        generated_files=[],
+        timing=timing(),
+    )
+    run = ModelRunFailure(
+        run_id="run-42",
+        backend_used="local",
+        error="run failed",
+        timing=timing(),
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
+    )
+    postprocess = PostprocessFailure(
+        run_id="run-42",
+        error="postprocess failed",
+        timing=timing(),
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
+    )
+    pipeline = PipelineFailure(
+        run_id="run-42",
+        stages_completed=[],
+        backend="local",
+        processor="noop",
+        failed_stage=PipelineStage.GENERATE,
+        error="pipeline failed",
+        timing=timing(),
+        cleaned_up=False,
+        generate_result=generate,
+    )
+    variants = [
+        (GenerateFailure, GenerateResult, generate),
+        (ModelRunFailure, ModelRunResult, run),
+        (PostprocessFailure, PostprocessResult, postprocess),
+        (PipelineFailure, PipelineResult, pipeline),
+    ]
+    for model, union, result in variants:
+        for invalid in ("", "   ", None):
+            raw = result.model_dump(mode="json")
+            raw["error"] = invalid
+            with pytest.raises(ValidationError):
+                model.model_validate(raw)
+            with pytest.raises(ValidationError):
+                TypeAdapter(union).validate_python(raw)
+
+    nested = pipeline.model_dump(mode="json")
+    nested["generate_result"]["error"] = ""
+    with pytest.raises(ValidationError):
+        TypeAdapter(PipelineResult).validate_python(nested)
+
+    sidecar = RunResultSidecar(
+        run_id="run-42", status="success", success=True, payload=run_success()
+    ).model_dump(mode="json")
+    sidecar["error"] = " "
+    with pytest.raises(ValidationError):
+        RunResultSidecar.model_validate(sidecar)
 
 
 def test_persistence_diagnostic_preserves_primary_error():

@@ -15,11 +15,22 @@ from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, StrictInt, field_validator, model_validator
+from pydantic import (
+    Field,
+    StrictInt,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from rompy.core.types import RompyBaseModel
 
 UTC = timezone.utc
+
+# Failure details are part of the durable contract and must always be useful.
+# ``strip_whitespace`` also rejects whitespace-only adversarial inputs while
+# preserving ordinary error text.
+NonEmptyError = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 def _utc(value: datetime, field: str) -> datetime:
@@ -195,8 +206,8 @@ class PersistenceDiagnostic(RompyBaseModel):
     status: Literal["failed"] = "failed"
     sidecar_kind: str
     sidecar_path: str
-    error: str
-    primary_error: str | None = None
+    error: NonEmptyError
+    primary_error: NonEmptyError | None = None
 
 
 class _ResultBase(RompyBaseModel):
@@ -223,7 +234,7 @@ class GenerateSuccess(_ResultBase):
 
 class GenerateFailure(_ResultBase):
     success: Literal[False] = False
-    error: str
+    error: NonEmptyError
     generated_files: list[str]
     timing: TimingInfo
     staging_dir: str | None = None
@@ -253,7 +264,7 @@ class ModelRunSuccess(_ExecutionEvidence):
 class ModelRunFailure(_ExecutionEvidence):
     success: Literal[False] = False
     backend_used: str
-    error: str
+    error: NonEmptyError
     timing: TimingInfo
     output_dir: str | None = None
     workspace_dir: str | None = None
@@ -276,7 +287,7 @@ class PostprocessSuccess(_ExecutionEvidence):
 
 class PostprocessFailure(_ExecutionEvidence):
     success: Literal[False] = False
-    error: str
+    error: NonEmptyError
     timing: TimingInfo
     output_dir: str | None = None
     message: str | None = None
@@ -320,7 +331,7 @@ class PipelineFailure(_ResultBase):
     backend: str
     processor: str
     failed_stage: PipelineStage
-    error: str
+    error: NonEmptyError
     timing: TimingInfo
     stage_timings: list[StageTiming] = Field(default_factory=list)
     cleaned_up: bool
@@ -370,7 +381,7 @@ class _SidecarBase(RompyBaseModel):
     run_id: str
     status: Literal["success", "failed"]
     success: bool
-    error: str | None = None
+    error: NonEmptyError | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     staging_dir: str | None = None

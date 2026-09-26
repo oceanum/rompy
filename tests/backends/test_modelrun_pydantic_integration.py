@@ -12,7 +12,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rompy.backends import DockerConfig, LocalConfig
-from rompy.core.responses import Artifact, GenerateSuccess, ModelRunFailure, ModelRunSuccess, TimingInfo
+from rompy.core.responses import (
+    Artifact,
+    GenerateSuccess,
+    ModelRunFailure,
+    ModelRunSuccess,
+    TimingInfo,
+)
+from rompy.core.result_persistence import load_run_result
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 from tests.test_helpers import DemoConfig
@@ -395,8 +402,42 @@ class TestModelRunPydanticIntegration:
         assert result.metadata is not None
         assert "backend_config" in result.metadata
         backend_config_dict = result.metadata["backend_config"]
-        assert backend_config_dict["command"] == "echo test"
-        assert backend_config_dict["timeout"] == 7200
+        assert backend_config_dict == {"type": "LocalConfig", "timeout": 7200}
+
+    def test_run_metadata_redacts_backend_secrets(self, model_run, tmp_path):
+        """Persisted run metadata contains no environment or build credentials."""
+        output_dir = tmp_path / model_run.run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        local = LocalConfig(
+            command="true",
+            working_dir=output_dir,
+            env_vars={"API_TOKEN": "env-token-secret", "PASSWORD": "env-password-secret"},
+        )
+        with patch("rompy.model.ModelRun.generate", return_value=typed_generation(output_dir)):
+            result = model_run.run(backend=local, workspace_dir=output_dir)
+
+        raw = (output_dir / "run_result.json").read_text()
+        assert result.metadata["backend_config"] == {"type": "LocalConfig", "timeout": 3600}
+        assert "env-token-secret" not in raw
+        assert "env-password-secret" not in raw
+        assert "env_vars" not in raw
+
+        docker = DockerConfig(
+            image="test-image:latest",
+            build_args={"TOKEN": "docker-token-secret", "PASSWORD": "docker-password-secret"},
+        )
+        with patch("rompy.run.docker.DockerRunBackend") as backend_class:
+            backend_class.return_value.run.return_value = True
+            backend_class.return_value.generate_result = None
+            result = model_run.run(backend=docker, workspace_dir=output_dir)
+
+        raw = (output_dir / "run_result.json").read_text()
+        assert result.metadata["backend_config"] == {"type": "DockerConfig", "timeout": 3600}
+        assert "docker-token-secret" not in raw
+        assert "docker-password-secret" not in raw
+        assert "build_args" not in raw
+        loaded = load_run_result(output_dir)
+        assert loaded.payload.metadata["backend_config"] == result.metadata["backend_config"]
 
     def test_run_success_populates_artifacts_from_validate_outputs(
         self, model_run, tmp_path

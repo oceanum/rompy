@@ -14,10 +14,12 @@ from unittest.mock import patch
 
 import pytest
 
-from rompy.core.result_persistence import GENERATE_RESULT_FILENAME, load_generate_result
-from rompy.model import ModelRun
 from rompy.core.config import BaseConfig
+from rompy.core.responses import GenerateFailure, GenerateSuccess
+from rompy.core.result_persistence import GENERATE_RESULT_FILENAME, load_generate_result
 from rompy.core.time import TimeRange
+from rompy.logging import LoggingConfig
+from rompy.model import ModelRun
 
 
 @pytest.fixture
@@ -128,6 +130,24 @@ def test_generate_returns_typed_result(tmp_model_run):
 
         assert result.success is True
         assert result.staging_dir == str(staging_dir)
+
+
+def test_generate_ascii_mode_returns_typed_result_and_sidecar(tmp_model_run, monkeypatch):
+    """ASCII presentation must not change typed generation or persistence."""
+    logging_config = LoggingConfig()
+    monkeypatch.setattr(logging_config, "use_ascii", True)
+    with patch.object(tmp_model_run.config.__class__, "render", return_value=None):
+        staging_dir = tmp_model_run.staging_dir
+        (staging_dir / "ascii-input.txt").write_text("test")
+
+        result = tmp_model_run.generate()
+
+    assert isinstance(result, (GenerateSuccess, GenerateFailure))
+    assert isinstance(result, GenerateSuccess)
+    assert result.staging_dir == str(staging_dir)
+    sidecar = load_generate_result(staging_dir)
+    assert isinstance(sidecar.payload, GenerateSuccess)
+    assert "ascii-input.txt" in sidecar.payload.generated_files
 
 
 def test_generate_sidecar_json_structure(tmp_model_run):
