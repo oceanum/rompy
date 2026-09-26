@@ -29,6 +29,7 @@ from .config import (
     ProcessorConfig,
 )
 from .protocol import (
+    ArtifactReconciliation,
     FailurePolicy,
     PostprocessContext,
     PostprocessFailurePolicy,
@@ -49,6 +50,7 @@ def _exception_message(error: BaseException, fallback: str) -> str:
 
 
 __all__ = [
+    "ArtifactReconciliation",
     "NoopPostprocessor",
     "NoopPostprocessorConfig",
     "BasePostprocessorConfig",
