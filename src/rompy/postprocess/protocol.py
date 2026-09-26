@@ -12,12 +12,14 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 import math
 from pathlib import Path
-from typing import Mapping, Protocol, TypeAlias, runtime_checkable
+from typing import Iterable, Mapping, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import TypeAdapter
 
+from rompy.core.artifacts import ArtifactReconciliation, reconcile_artifacts
 from rompy.core.responses import (
     ArtifactIdentity,
+    ArtifactType,
     ModelRunFailure,
     ModelRunResult,
     ModelRunSuccess,
@@ -210,6 +212,25 @@ class PostprocessContext:
         state[namespace] = values
         return replace(self, operational_state=state)
 
+    def reconcile_artifacts(
+        self,
+        *,
+        artifact_types: ArtifactType | Iterable[ArtifactType] | None = None,
+    ) -> ArtifactReconciliation:
+        """Reconcile this handoff's typed evidence without running a step.
+
+        The context's staging directory is the only workspace authority.  This
+        exposes the core reconciliation contract to protocol steps while
+        leaving ordered execution and result persistence to the future runner.
+        """
+        return reconcile_artifacts(
+            self.expected_outputs,
+            self.artifacts,
+            workspace=self.staging_dir,
+            missing=self.missing_outputs,
+            artifact_types=artifact_types,
+        )
+
     def handoff(self, result: PostprocessResultValue) -> "PostprocessContext":
         """Create the next ordered-step context from a concrete step result.
 
@@ -267,6 +288,7 @@ __all__ = [
     "FailurePolicy",
     "JSONValue",
     "OperationalState",
+    "ArtifactReconciliation",
     "PostprocessContext",
     "PostprocessFailurePolicy",
     "PostprocessProcessor",
