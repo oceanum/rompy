@@ -71,6 +71,9 @@ def test_context_and_step_use_concrete_typed_handoff(tmp_path):
     assert isinstance(result, PostprocessSuccess)
     assert next_context.artifacts == tuple(result.artifacts)
     assert next_context.failure_policy is PostprocessFailurePolicy.CONTINUE
+    reconciled = context.reconcile_artifacts(artifact_types=[ArtifactType.NETCDF])
+    assert reconciled.selected == [context.artifacts[0]]
+    assert reconciled.missing == []
 
 
 def test_operational_state_snapshots_input_and_nested_values(tmp_path):
