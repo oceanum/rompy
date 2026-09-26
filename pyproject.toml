@@ -88,6 +88,7 @@ noop = "rompy.postprocess:NoopPostprocessor"
 
 [project.entry-points."rompy.postprocess.config"]
 noop = "rompy.postprocess.config:NoopPostprocessorConfig"
+transfer = "rompy.postprocess.transfer:TransferPostprocessorConfig"
 
 [project.entry-points."rompy.pipeline"]
 local = "rompy.pipeline:LocalPipelineBackend"
