@@ -15,6 +15,8 @@ from pydantic import TypeAdapter
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
+    ModelRunFailure,
+    ModelRunSuccess,
     PostprocessFailure,
     PostprocessResult,
     PostprocessSuccess,
@@ -25,6 +27,16 @@ from .config import (
     BasePostprocessorConfig,
     NoopPostprocessorConfig,
     ProcessorConfig,
+)
+from .protocol import (
+    FailurePolicy,
+    PostprocessContext,
+    PostprocessFailurePolicy,
+    PostprocessProcessor,
+    PostprocessStep,
+    PostprocessStepProtocol,
+    PostprocessorProtocol,
+    ProcessorProtocol,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +53,14 @@ __all__ = [
     "NoopPostprocessorConfig",
     "BasePostprocessorConfig",
     "ProcessorConfig",
+    "FailurePolicy",
+    "PostprocessContext",
+    "PostprocessFailurePolicy",
+    "PostprocessProcessor",
+    "PostprocessStep",
+    "PostprocessStepProtocol",
+    "PostprocessorProtocol",
+    "ProcessorProtocol",
 ]
 
 
@@ -56,7 +76,7 @@ class NoopPostprocessor:
 
     def process(
         self,
-        model_run,
+        model_run: ModelRunSuccess | ModelRunFailure,
         validate_outputs: bool | None = None,
         output_dir: Optional[Union[str, Path]] = None,
         **kwargs,

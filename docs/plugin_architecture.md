@@ -2,6 +2,12 @@
 
 Rompy features a flexible plugin-based architecture that allows for extensible model execution and output processing. The system uses Python entry points to automatically discover and load plugins, making it easy to extend with custom implementations.
 
+Postprocessor configuration discovery is standardized on the
+`rompy.postprocess.config` entry-point group. The sibling
+`rompy.postprocess` group names runtime implementations; it is not consulted
+when loading a validated configuration. See [Postprocessor Protocol](postprocess_protocol.md)
+for the typed step/context ownership contract.
+
 ## Core Plugin Categories
 
 ROMPY implements three main plugin categories using Python entry points:

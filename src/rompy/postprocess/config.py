@@ -134,6 +134,83 @@ class NoopPostprocessorConfig(BasePostprocessorConfig):
 ProcessorConfig = Union[NoopPostprocessorConfig]
 
 
+_PROCESSOR_CONFIG_GROUP = "rompy.postprocess.config"
+
+
+def _entry_point_provider_identity(entry_point) -> str:
+    """Return a stable provider identity for ambiguity diagnostics."""
+    distribution = getattr(entry_point, "dist", None)
+    distribution_name = getattr(distribution, "name", None)
+    if distribution_name is None and distribution is not None:
+        metadata = getattr(distribution, "metadata", None)
+        if metadata is not None:
+            distribution_name = metadata.get("Name")
+    target = getattr(entry_point, "value", None)
+    if distribution_name and target:
+        return f"{distribution_name} ({target})"
+    if distribution_name:
+        return str(distribution_name)
+    if target:
+        return str(target)
+    module = getattr(entry_point, "module", None)
+    attr = getattr(entry_point, "attr", None)
+    if module and attr:
+        return f"{module}:{attr}"
+    if module:
+        return str(module)
+    return type(entry_point).__module__ + "." + type(entry_point).__qualname__
+
+
+def _processor_config_entry_points():
+    """Return deterministic config entry points from the canonical group.
+
+    ``rompy.postprocess.config`` is the discovery group for validated config
+    classes. The sibling ``rompy.postprocess`` group contains runtime
+    implementations and is not consulted as a config registry. Compatibility
+    branches support both modern and legacy ``importlib.metadata`` APIs.
+    Duplicate names are rejected rather than resolved by metadata enumeration
+    order.
+    """
+    from importlib.metadata import entry_points
+
+    try:
+        discovered = entry_points()
+    except TypeError:  # pragma: no cover - legacy implementations
+        discovered = entry_points(group=_PROCESSOR_CONFIG_GROUP)
+    if hasattr(discovered, "select"):
+        selected = discovered.select(group=_PROCESSOR_CONFIG_GROUP)
+    elif isinstance(discovered, dict):  # pragma: no cover - Python 3.9 API
+        selected = discovered.get(_PROCESSOR_CONFIG_GROUP, ())
+    else:
+        selected = discovered
+    selected = tuple(selected)
+
+    by_name = {}
+    for entry_point in selected:
+        by_name.setdefault(entry_point.name, []).append(entry_point)
+    duplicates = {
+        name: sorted(_entry_point_provider_identity(ep) for ep in entry_points)
+        for name, entry_points in by_name.items()
+        if len(entry_points) > 1
+    }
+    if duplicates:
+        details = "; ".join(
+            f"{name}: {', '.join(providers)}"
+            for name, providers in sorted(duplicates.items())
+        )
+        raise ValueError(
+            "Ambiguous postprocessor config entry point names; "
+            f"duplicate providers ({details})"
+        )
+
+    return tuple(
+        sorted(
+            selected,
+            key=lambda item: (item.name, _entry_point_provider_identity(item)),
+        )
+    )
+
+
 def _load_processor_config(config_file):
     """Load postprocessor configuration from a YAML or JSON file.
 
@@ -152,7 +229,6 @@ def _load_processor_config(config_file):
         yaml.YAMLError: If the file is neither valid JSON nor valid YAML
     """
     import json
-    from importlib.metadata import entry_points
 
     path = Path(config_file)
 
@@ -179,8 +255,8 @@ def _load_processor_config(config_file):
     if processor_type is None:
         raise ValueError("Config file must contain a 'type' field")
 
-    # Load from entry point
-    eps = entry_points(group="rompy.postprocess.config")
+    # Load from the canonical config entry-point group.
+    eps = _processor_config_entry_points()
     for ep in eps:
         if ep.name == processor_type:
             config_class = ep.load()
@@ -214,8 +290,6 @@ def _load_processor_config_from_dict(config_data: dict) -> BasePostprocessorConf
     Raises:
         ValueError: If the processor type is not found or config_data is invalid
     """
-    from importlib.metadata import entry_points
-
     if not isinstance(config_data, dict):
         raise ValueError(f"Config data must be a dictionary, got {type(config_data)}")
 
@@ -227,8 +301,8 @@ def _load_processor_config_from_dict(config_data: dict) -> BasePostprocessorConf
     if processor_type is None:
         raise ValueError("Config must contain a 'type' field")
 
-    # Load from entry point
-    eps = entry_points(group="rompy.postprocess.config")
+    # Load from the canonical config entry-point group.
+    eps = _processor_config_entry_points()
     for ep in eps:
         if ep.name == processor_type:
             config_class = ep.load()
