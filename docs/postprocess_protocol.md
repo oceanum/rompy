@@ -67,6 +67,12 @@ composition while keeping this typed handoff contract small.
   result or artifact authority.
 - `FAIL_FAST` records remaining steps as unattempted; `CONTINUE` attempts
   later steps and retains primary/secondary failure evidence.
+- A `ModelRunFailure` remains the postprocess pipeline's primary failure. Steps
+  may process its typed artifacts to retain diagnostics, but an empty pipeline,
+  a no-source transfer, or a later successful step still yields
+  `PostprocessFailure` and a non-success canonical sidecar. The original run
+  error is kept in `postprocess_pipeline.primary_error`; step diagnostics are
+  recorded as secondary evidence.
 
 ## Configuration discovery
 

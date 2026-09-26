@@ -7,6 +7,7 @@ import pytest
 from rompy.core.responses import (
     ArtifactType,
     LocalArtifact,
+    ModelRunFailure,
     ModelRunSuccess,
     PostprocessFailure,
     PostprocessSuccess,
@@ -67,6 +68,66 @@ class _Step:
             missing_outputs=list(context.missing_outputs),
             timing=TimingInfo(start_time=NOW, end_time=NOW),
         )
+
+
+def _failed_run(tmp_path):
+    return ModelRunFailure(
+        run_id="runner-test",
+        backend_used="test",
+        error="model run failed",
+        output_dir=str(tmp_path),
+        workspace_dir=str(tmp_path),
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
+        timing=TimingInfo(start_time=NOW, end_time=NOW),
+    )
+
+
+def test_no_source_transfer_stays_successful_for_successful_run(tmp_path):
+    result = run_postprocess_pipeline(
+        _run(tmp_path),
+        [
+            TransferPostprocessor(
+                TransferPostprocessorConfig(
+                    destinations=["file:///archive"],
+                    artifact_types=[ArtifactType.NETCDF],
+                )
+            )
+        ],
+        staging_dir=tmp_path,
+    )
+
+    assert isinstance(result, PostprocessSuccess)
+    assert result.file_count == 0
+    assert result.metadata["postprocess_pipeline"]["steps"] == [
+        {"name": "transfer", "status": "succeeded"}
+    ]
+
+
+def test_failed_model_run_stays_primary_when_no_source_transfer_succeeds(tmp_path):
+    result = run_postprocess_pipeline(
+        _failed_run(tmp_path),
+        [
+            TransferPostprocessor(
+                TransferPostprocessorConfig(
+                    destinations=["file:///archive"],
+                    artifact_types=[ArtifactType.NETCDF],
+                )
+            )
+        ],
+        staging_dir=tmp_path,
+    )
+
+    assert isinstance(result, PostprocessFailure)
+    assert result.error == "model run failed"
+    evidence = result.metadata["postprocess_pipeline"]
+    assert evidence["primary_error"] == "model run failed"
+    assert evidence["initial_run_failure"]["backend_used"] == "test"
+    assert evidence["steps"] == [{"name": "transfer", "status": "succeeded"}]
+    sidecar = json.loads((tmp_path / "postprocess_result.json").read_text())
+    assert sidecar["success"] is False
+    assert sidecar["error"] == "model run failed"
 
 
 def test_fail_fast_retains_unattempted_and_one_sidecar(tmp_path):

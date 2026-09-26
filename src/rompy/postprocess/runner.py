@@ -14,6 +14,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from rompy.core.responses import (
+    ModelRunFailure,
     PostprocessFailure,
     PostprocessResult,
     PostprocessResultSidecar,
@@ -61,6 +62,12 @@ def run_postprocess_pipeline(
     ``FAIL_FAST`` records the remaining steps as unattempted.  Step metadata is
     intentionally ordinary JSON metadata so the existing result schema remains
     backwards compatible.
+
+    A failed model run is always the aggregate primary failure.  Steps may
+    still inspect its typed evidence (for example, to record transfer or
+    validation diagnostics), but a successful step can never turn that run
+    into a successful postprocess result.  This guard also covers an empty
+    pipeline and processors with no transferable sources.
     """
     start = datetime.now(timezone.utc)
     policy = PostprocessFailurePolicy(failure_policy)
@@ -73,12 +80,23 @@ def run_postprocess_pipeline(
     step_list = list(steps)
     evidence: list[dict[str, object]] = []
     current: PostprocessResultValue | None = None
-    primary_error: str | None = None
+    initial_run_failure = (
+        context.run_result
+        if isinstance(context.run_result, ModelRunFailure)
+        else None
+    )
+    primary_error: str | None = (
+        initial_run_failure.error if initial_run_failure is not None else None
+    )
     secondary_errors: list[str] = []
+    step_failed = False
 
     for index, step in enumerate(step_list):
         name = _step_name(step, index)
-        if primary_error is not None and policy is PostprocessFailurePolicy.FAIL_FAST:
+        # An initial run failure is evidence, not a postprocess fail-fast
+        # trigger: processors may still inspect it and add diagnostics.  Once
+        # a postprocess step fails, FAIL_FAST retains the existing semantics.
+        if step_failed and policy is PostprocessFailurePolicy.FAIL_FAST:
             evidence.append(_evidence(name, "unattempted"))
             continue
         try:
@@ -119,6 +137,7 @@ def run_postprocess_pipeline(
             if updates and namespace:
                 context = context.with_state(namespace, updates)
         else:
+            step_failed = True
             evidence.append(_evidence(name, "failed", error=current.error))
             if primary_error is None:
                 primary_error = current.error
@@ -187,6 +206,43 @@ def run_postprocess_pipeline(
                 }
             }
         )
+
+    if initial_run_failure is not None:
+        # The run failure remains authoritative even when a step succeeded or
+        # produced a more specific diagnostic.  Keep that diagnostic in the
+        # aggregate metadata instead of allowing it to change the result kind.
+        pipeline_metadata = {
+            "failure_policy": policy.value,
+            "steps": evidence,
+            "primary_error": initial_run_failure.error,
+            "secondary_errors": secondary_errors,
+            "initial_run_failure": {
+                "backend_used": initial_run_failure.backend_used,
+                "error": initial_run_failure.error,
+            },
+        }
+        if current.success:
+            current = PostprocessFailure(
+                run_id=current.run_id,
+                error=initial_run_failure.error,
+                output_dir=current.output_dir,
+                artifacts=list(current.artifacts),
+                expected_outputs=list(current.expected_outputs),
+                missing_outputs=list(current.missing_outputs),
+                message="Model run failed; postprocess evidence is diagnostic only",
+                metadata={**current.metadata, "postprocess_pipeline": pipeline_metadata},
+                timing=current.timing,
+            )
+        else:
+            current = current.model_copy(
+                update={
+                    "error": initial_run_failure.error,
+                    "metadata": {
+                        **current.metadata,
+                        "postprocess_pipeline": pipeline_metadata,
+                    },
+                }
+            )
 
     # One sidecar, owned here rather than by a step.  A persistence error is a
     # secondary error when an operation already failed.
