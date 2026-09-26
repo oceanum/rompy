@@ -90,6 +90,12 @@ def _load_backends():
 RUN_BACKENDS, POSTPROCESSORS, PIPELINE_BACKENDS = _load_backends()
 
 
+def _exception_message(error: BaseException, fallback: str) -> str:
+    """Preserve useful exception text while satisfying the failure contract."""
+    message = str(error)
+    return message if message.strip() else fallback
+
+
 def _make_model_run_result(**data):
     """Construct the concrete result variant at the runtime boundary."""
     data.setdefault("artifacts", [])
@@ -98,7 +104,7 @@ def _make_model_run_result(**data):
     variant = ModelRunSuccess if data.get("success") else ModelRunFailure
     if data.get("success"):
         data.pop("error", None)
-    elif not data.get("error"):
+    elif not isinstance(data.get("error"), str) or not data["error"].strip():
         data["error"] = "model execution failed"
     return variant(**data)
 
@@ -374,7 +380,7 @@ class ModelRun(RompyBaseModel):
             staging_dir = self._staging_dir
             result = GenerateFailure(
                 run_id=self.run_id,
-                error=str(e),
+                error=_exception_message(e, "model generation failed"),
                 generated_files=(
                     [str(f.relative_to(staging_dir).as_posix()) for f in staging_dir.rglob("*") if f.is_file()]
                     if staging_dir is not None and staging_dir.exists() else []
@@ -710,6 +716,7 @@ class ModelRun(RompyBaseModel):
             output_dir_path = Path(self.output_dir) if self.output_dir else None
             if output_dir_path is not None and self.run_id_subdir:
                 output_dir_path = output_dir_path / self.run_id
+            error_message = _exception_message(e, "model execution failed")
             result = _make_model_run_result(
                 success=False,
                 run_id=self.run_id,
@@ -720,8 +727,8 @@ class ModelRun(RompyBaseModel):
                 ),
                 output_dir=str(output_dir_path) if output_dir_path else str(self.output_dir),
                 workspace_dir=workspace_dir_str,
-                error=str(e),
-                message=f"Model execution failed with exception: {str(e)}",
+                error=error_message,
+                message=f"Model execution failed with exception: {error_message}",
                 timing=TimingInfo(
                     start_time=start_time,
                     end_time=datetime.now(timezone.utc),

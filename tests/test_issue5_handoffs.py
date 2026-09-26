@@ -1,8 +1,8 @@
 """Focused issue #5 runtime handoff tests."""
 
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-import time
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -11,7 +11,6 @@ from pydantic import TypeAdapter
 
 from rompy.backends.config import LocalConfig
 from rompy.cli import _build_postprocess_processor_input, _result_envelope
-from rompy.core.result_persistence import load_run_result
 from rompy.core.responses import (
     GenerateFailure,
     GenerateSuccess,
@@ -19,20 +18,28 @@ from rompy.core.responses import (
     ModelRunFailure,
     ModelRunResult,
     ModelRunSuccess,
+    PersistenceDiagnostic,
+    PipelineFailure,
     PipelineStage,
     PostprocessFailure,
     PostprocessSuccess,
-    PersistenceDiagnostic,
     TimingInfo,
 )
+from rompy.core.result_persistence import load_run_result
 from rompy.model import ModelRun
 from rompy.pipeline import LocalPipelineBackend
-from rompy.postprocess.config import BasePostprocessorConfig
+from rompy.postprocess import NoopPostprocessor
+from rompy.postprocess.config import BasePostprocessorConfig, NoopPostprocessorConfig
 
 
 def timing():
     now = datetime.now(timezone.utc)
     return TimingInfo(start_time=now, end_time=now)
+
+
+class EmptyExceptionPath:
+    def __fspath__(self):
+        raise Exception()  # noqa: BLE001 - exercise empty exception messages
 
 
 def run_success(tmp_path):
@@ -126,6 +133,59 @@ def test_generate_failure_preserves_path_timing_and_primary_error(tmp_path):
     assert result.staging_dir == str(model.staging_dir)
     assert result.timing.start_time.tzinfo is not None
     assert result.timing.end_time >= result.timing.start_time
+
+
+def test_empty_generation_exception_returns_typed_failure(tmp_path):
+    model = ModelRun(run_id="run-5", output_dir=tmp_path)
+    with patch.object(model.config.__class__, "render", side_effect=Exception()):
+        result = model.generate()
+    assert isinstance(result, GenerateFailure)
+    assert result.error == "model generation failed"
+
+
+def test_empty_noop_postprocess_exception_returns_typed_failure(tmp_path):
+    processor = NoopPostprocessor(NoopPostprocessorConfig(validate_outputs=True))
+    result = processor.process(run_success(tmp_path), output_dir=EmptyExceptionPath())
+    assert isinstance(result, PostprocessFailure)
+    assert result.error == "postprocessing failed"
+
+
+def test_empty_pipeline_stage_exception_returns_typed_failure(tmp_path):
+    generated = GenerateSuccess(run_id="run-5", staging_dir=str(tmp_path), generated_files=[], timing=timing())
+    model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
+    model.generate.return_value = generated
+    model.run.return_value = run_success(tmp_path)
+    model.postprocess.side_effect = Exception()
+    result = LocalPipelineBackend().execute(
+        model, backend_config=LocalConfig(command="true"), processor=RecordingConfig()
+    )
+    assert isinstance(result, PipelineFailure)
+    assert result.error == "postprocessing failed"
+    assert isinstance(result.postprocess_results, PostprocessFailure)
+    assert result.postprocess_results.error == "postprocessing failed"
+
+
+def test_empty_pipeline_outer_exception_returns_typed_failure(tmp_path):
+    generated = GenerateSuccess(run_id="run-5", staging_dir=str(tmp_path), generated_files=[], timing=timing())
+    model = Mock(run_id="run-5", output_dir=tmp_path, staging_dir=tmp_path)
+    model.generate.return_value = generated
+    model.run.return_value = SimpleNamespace(
+        success=True,
+        output_dir=EmptyExceptionPath(),
+        workspace_dir=str(tmp_path),
+        timing=timing(),
+    )
+    model.postprocess.return_value = PostprocessSuccess(
+        run_id="run-5", output_dir=str(tmp_path), validated=True, timing=timing(),
+        artifacts=[], expected_outputs=[], missing_outputs=[],
+    )
+    result = LocalPipelineBackend().execute(
+        model, backend_config=LocalConfig(command="true"), processor=RecordingConfig()
+    )
+    assert isinstance(result, PipelineFailure)
+    assert result.error == "postprocessing failed"
+    assert result.stages_completed == [PipelineStage.GENERATE, PipelineStage.RUN]
+    assert isinstance(result.postprocess_results, PostprocessFailure)
 
 
 def test_run_and_generate_results_are_typed_and_persist_failures_are_observable(tmp_path, monkeypatch):

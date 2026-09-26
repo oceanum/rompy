@@ -29,6 +29,13 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
+
+def _exception_message(error: BaseException, fallback: str) -> str:
+    """Preserve useful exception text while satisfying the failure contract."""
+    message = str(error)
+    return message if message.strip() else fallback
+
+
 __all__ = [
     "NoopPostprocessor",
     "NoopPostprocessorConfig",
@@ -205,7 +212,7 @@ class NoopPostprocessor:
             logger.exception(f"Error in no-op postprocessor: {e}")
             return PostprocessFailure(
                 run_id=getattr(model_run, "run_id", "unknown"),
-                error=str(e),
+                error=_exception_message(e, "postprocessing failed"),
                 message="Exception during postprocessing",
                 artifacts=list(getattr(model_run, "artifacts", [])),
                 expected_outputs=list(getattr(model_run, "expected_outputs", [])),

@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _exception_message(error: BaseException, fallback: str) -> str:
+    """Preserve useful exception text while satisfying the failure contract."""
+    message = str(error)
+    return message if message.strip() else fallback
+
+
 class LocalPipelineBackend:
     """Local pipeline backend that executes the full workflow locally.
 
@@ -102,8 +108,8 @@ class LocalPipelineBackend:
                 # Serialize to dict for logging
                 result_dict = result.model_dump()
         """
-        from rompy.postprocess.config import BasePostprocessorConfig
         from rompy.backends.config import BaseBackendConfig
+        from rompy.postprocess.config import BasePostprocessorConfig
 
         # Validate input parameters
         if not model_run:
@@ -211,9 +217,10 @@ class LocalPipelineBackend:
                 generate_timing = TimingInfo(
                     start_time=start_time, end_time=datetime.now(timezone.utc)
                 )
+                error_message = _exception_message(e, "model generation failed")
                 generate_failure = GenerateFailure(
                     run_id=model_run.run_id,
-                    error=str(e),
+                    error=error_message,
                     generated_files=[],
                     staging_dir=str(staging_dir) if staging_dir else None,
                     timing=generate_timing,
@@ -231,7 +238,7 @@ class LocalPipelineBackend:
                     staging_dir=str(staging_dir) if staging_dir else None,
                     error=generate_failure.error,
                     generate_result=generate_failure,
-                    message=f"Input file generation failed: {str(e)}",
+                    message=f"Input file generation failed: {error_message}",
                     metadata=stage_metadata(generate_failure),
                     stage_timings=stage_timings,
                     timing=TimingInfo(
@@ -322,10 +329,11 @@ class LocalPipelineBackend:
                 run_timing = TimingInfo(
                     start_time=run_start, end_time=datetime.now(timezone.utc)
                 )
+                error_message = _exception_message(e, "model execution failed")
                 run_failure = ModelRunFailure(
                     run_id=model_run.run_id,
                     backend_used=backend_type,
-                    error=str(e),
+                    error=error_message,
                     timing=run_timing,
                     output_dir=str(getattr(model_run, "output_dir", "")),
                     workspace_dir=str(staging_dir) if staging_dir else None,
@@ -345,7 +353,7 @@ class LocalPipelineBackend:
                     failed_stage=PipelineStage.RUN,
                     staging_dir=str(staging_dir),
                     workspace_dir=str(staging_dir),
-                    message=f"Model run error: {str(e)}",
+                    message=f"Model run error: {error_message}",
                     error=run_failure.error,
                     run_result=run_failure,
                     metadata=stage_metadata(run_failure),
@@ -401,9 +409,10 @@ class LocalPipelineBackend:
                 logger.exception(f"Error during postprocessing: {e}")
                 postprocess_timing = TimingInfo(start_time=postprocess_start, end_time=datetime.now(timezone.utc))
                 stage_timings.append(StageTiming(stage=PipelineStage.POSTPROCESS, timing=postprocess_timing))
+                error_message = _exception_message(e, "postprocessing failed")
                 postprocess_failure = PostprocessFailure(
                     run_id=model_run.run_id,
-                    error=str(e),
+                    error=error_message,
                     output_dir=str(staging_dir) if staging_dir else None,
                     timing=postprocess_timing,
                     artifacts=[],
@@ -419,7 +428,7 @@ class LocalPipelineBackend:
                     failed_stage=PipelineStage.POSTPROCESS,
                     staging_dir=str(staging_dir),
                     output_dir=postprocess_failure.output_dir,
-                    message=f"Postprocessing error: {str(e)}",
+                    message=f"Postprocessing error: {error_message}",
                     error=postprocess_failure.error,
                     postprocess_results=postprocess_failure,
                     metadata=stage_metadata(postprocess_failure),
@@ -464,23 +473,31 @@ class LocalPipelineBackend:
             attempted_timing = TimingInfo(
                 start_time=datetime.now(timezone.utc), end_time=datetime.now(timezone.utc)
             )
+            error_message = _exception_message(
+                e,
+                {
+                    PipelineStage.GENERATE: "model generation failed",
+                    PipelineStage.RUN: "model execution failed",
+                    PipelineStage.POSTPROCESS: "postprocessing failed",
+                }[failed_stage],
+            )
             nested = {}
             if failed_stage is PipelineStage.GENERATE:
                 nested["generate_result"] = GenerateFailure(
-                    run_id=model_run.run_id, error=str(e), generated_files=[],
+                    run_id=model_run.run_id, error=error_message, generated_files=[],
                     staging_dir=str(staging_dir) if staging_dir else None,
                     timing=attempted_timing,
                 )
             elif failed_stage is PipelineStage.RUN:
                 nested["run_result"] = ModelRunFailure(
-                    run_id=model_run.run_id, backend_used=backend_type, error=str(e),
+                    run_id=model_run.run_id, backend_used=backend_type, error=error_message,
                     timing=attempted_timing, output_dir=str(getattr(model_run, "output_dir", "")),
                     workspace_dir=str(staging_dir) if staging_dir else None,
                     artifacts=[], expected_outputs=[], missing_outputs=[],
                 )
             else:
                 nested["postprocess_results"] = PostprocessFailure(
-                    run_id=model_run.run_id, error=str(e), timing=attempted_timing,
+                    run_id=model_run.run_id, error=error_message, timing=attempted_timing,
                     output_dir=str(staging_dir) if staging_dir else None,
                     artifacts=[], expected_outputs=[], missing_outputs=[],
                 )
@@ -490,11 +507,11 @@ class LocalPipelineBackend:
                 run_id=model_run.run_id,
                 backend=backend_type,
                 processor=processor_type,
-                stages_completed=stages_completed,
+                stages_completed=stages_completed[: list(PipelineStage).index(failed_stage)],
                 failed_stage=failed_stage,
                 staging_dir=str(staging_dir) if staging_dir else None,
-                message=f"Pipeline error: {str(e)}",
-                error=str(e),
+                message=f"Pipeline error: {error_message}",
+                error=error_message,
                 metadata=stage_metadata(next(iter(nested.values()))),
                 stage_timings=stage_timings,
                 timing=TimingInfo(
@@ -518,6 +535,6 @@ class LocalPipelineBackend:
             shutil.rmtree(output_dir)
             return not output_dir.exists()
         except Exception as e:
-            self._last_cleanup_error = str(e)
+            self._last_cleanup_error = _exception_message(e, "cleanup failed")
             logger.warning(f"Failed to cleanup output directory: {e}")
             return False
