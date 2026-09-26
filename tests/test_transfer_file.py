@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from rompy.transfer.file import FileTransfer
+from rompy.transfer.exceptions import UnsupportedOperation
 
 
 @pytest.fixture

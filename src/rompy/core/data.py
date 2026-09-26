@@ -1,15 +1,17 @@
 """Rompy core data objects."""
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
+from shutil import copytree
 from typing import Literal, Optional, Union
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 from cloudpathlib import AnyPath
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import Field, PrivateAttr, field_validator, model_validator
 
 from rompy.core.filters import Filter
 from rompy.core.grid import BaseGrid, RegularGrid
@@ -93,12 +95,7 @@ class DataBlob(DataBase):
         default=False,
         description="Whether to create a symbolic link instead of copying the file",
     )
-    _copied: Optional[Path] = PrivateAttr(default=None)
-
-    @property
-    def copied_path(self) -> Optional[Path]:
-        """Return the destination created by the most recent successful get()."""
-        return self._copied
+    _copied: Optional[str] = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def validate_link_scheme_compat(self):
@@ -157,7 +154,7 @@ class DataBlob(DataBase):
             uri=str(self.source), destdir=destdir, name=name, link=self.link
         )
 
-        self._copied = outfile
+        self._copied = str(outfile)
         return outfile
 
 
