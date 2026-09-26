@@ -39,7 +39,7 @@ def timing():
 
 class EmptyExceptionPath:
     def __fspath__(self):
-        raise Exception()  # noqa: BLE001 - exercise empty exception messages
+        raise Exception()
 
 
 def run_success(tmp_path):
