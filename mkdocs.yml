@@ -24,6 +24,7 @@ nav:
     - Advanced Topics:
           - Backends: backends.md
           - Backend Reference: developer/backend_reference.md
+          - Postprocessor Protocol: postprocess_protocol.md
           - CLI: cli.md
           - Formatting and Logging: formatting_and_logging.md
           - Configuration Templating: templating.md

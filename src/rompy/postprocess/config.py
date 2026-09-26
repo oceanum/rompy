@@ -134,6 +134,29 @@ class NoopPostprocessorConfig(BasePostprocessorConfig):
 ProcessorConfig = Union[NoopPostprocessorConfig]
 
 
+def _processor_config_entry_points():
+    """Return deterministic config entry points from the canonical group.
+
+    ``rompy.postprocess.config`` is the discovery group for validated config
+    classes. The sibling ``rompy.postprocess`` group contains runtime
+    implementations and is not consulted as a config registry. Compatibility
+    branches support both modern and legacy ``importlib.metadata`` APIs.
+    """
+    from importlib.metadata import entry_points
+
+    try:
+        discovered = entry_points()
+    except TypeError:  # pragma: no cover - legacy implementations
+        discovered = entry_points(group="rompy.postprocess.config")
+    if hasattr(discovered, "select"):
+        selected = discovered.select(group="rompy.postprocess.config")
+    elif isinstance(discovered, dict):  # pragma: no cover - Python 3.9 API
+        selected = discovered.get("rompy.postprocess.config", ())
+    else:
+        selected = discovered
+    return tuple(sorted(selected, key=lambda item: item.name))
+
+
 def _load_processor_config(config_file):
     """Load postprocessor configuration from a YAML or JSON file.
 
@@ -152,7 +175,6 @@ def _load_processor_config(config_file):
         yaml.YAMLError: If the file is neither valid JSON nor valid YAML
     """
     import json
-    from importlib.metadata import entry_points
 
     path = Path(config_file)
 
@@ -179,8 +201,8 @@ def _load_processor_config(config_file):
     if processor_type is None:
         raise ValueError("Config file must contain a 'type' field")
 
-    # Load from entry point
-    eps = entry_points(group="rompy.postprocess.config")
+    # Load from the canonical config entry-point group.
+    eps = _processor_config_entry_points()
     for ep in eps:
         if ep.name == processor_type:
             config_class = ep.load()
@@ -214,8 +236,6 @@ def _load_processor_config_from_dict(config_data: dict) -> BasePostprocessorConf
     Raises:
         ValueError: If the processor type is not found or config_data is invalid
     """
-    from importlib.metadata import entry_points
-
     if not isinstance(config_data, dict):
         raise ValueError(f"Config data must be a dictionary, got {type(config_data)}")
 
@@ -227,8 +247,8 @@ def _load_processor_config_from_dict(config_data: dict) -> BasePostprocessorConf
     if processor_type is None:
         raise ValueError("Config must contain a 'type' field")
 
-    # Load from entry point
-    eps = entry_points(group="rompy.postprocess.config")
+    # Load from the canonical config entry-point group.
+    eps = _processor_config_entry_points()
     for ep in eps:
         if ep.name == processor_type:
             config_class = ep.load()
