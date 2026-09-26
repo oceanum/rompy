@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Dict, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
-    pass
+    from . import NoopPostprocessor
 
 
 class BasePostprocessorConfig(BaseModel, ABC):
@@ -72,13 +72,6 @@ class BasePostprocessorConfig(BaseModel, ABC):
                 raise ValueError("Environment variable keys cannot be empty")
 
         return v
-
-    def build_processor(self):
-        """Construct the processor with this validated configuration."""
-        processor_class = self.get_postprocessor_class()
-        if processor_class is None:
-            raise TypeError(f"{type(self).__name__} did not provide a processor class")
-        return processor_class(self)
 
     @abstractmethod
     def get_postprocessor_class(self):

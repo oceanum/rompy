@@ -4,15 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-import logging
 from pathlib import Path
 from typing import Optional
 
 from .registry import get_transfer
 from .utils import join_prefix
-
-
-logger = logging.getLogger(__name__)
 
 
 class TransferFailurePolicy(Enum):
@@ -134,11 +130,6 @@ class TransferManager:
 
                 try:
                     transfer = get_transfer(dest_prefix)
-                    logger.info(
-                        "Transfer %s -> %s",
-                        local_path,
-                        dest_uri,
-                    )
                     transfer.put(local_path, dest_uri)
 
                     items.append(
@@ -152,11 +143,9 @@ class TransferManager:
                         )
                     )
                     succeeded += 1
-                    logger.info("Transfer succeeded for %s", dest_uri)
 
                 except Exception as e:
                     error_msg = f"{type(e).__name__}: {str(e)}"
-                    logger.error("Transfer failed for %s: %s", dest_uri, error_msg)
 
                     items.append(
                         TransferItemResult(

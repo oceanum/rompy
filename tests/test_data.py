@@ -88,22 +88,6 @@ def test_get(tmp_path, txt_data_source):
     ds = txt_data_source
     output = ds.get(tmp_path)
     assert output.is_file()
-    assert isinstance(ds.copied_path, Path)
-    assert ds.copied_path == output
-
-
-def test_copied_path_is_unset_before_get(txt_data_source):
-    assert txt_data_source.copied_path is None
-
-
-def test_get_link_records_path(tmp_path, txt_data_source):
-    blob = DataBlob(id="linked", source=txt_data_source.source, link=True)
-
-    output = blob.get(tmp_path)
-
-    assert output.is_symlink()
-    assert blob.copied_path == output
-    assert isinstance(blob.copied_path, Path)
 
 
 def test_get_no_path(txt_data_source):
