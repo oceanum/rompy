@@ -109,7 +109,7 @@ class LocalPipelineBackend:
                 result_dict = result.model_dump()
         """
         from rompy.backends.config import BaseBackendConfig
-        from rompy.postprocess.config import BasePostprocessorConfig
+        from rompy.postprocess.config import BasePostprocessorConfig, PostprocessPipelineConfig
 
         # Validate input parameters
         if not model_run:
@@ -132,10 +132,10 @@ class LocalPipelineBackend:
         if processor is None:
             raise ValueError("processor configuration is required")
 
-        if not isinstance(processor, BasePostprocessorConfig):
+        if not isinstance(processor, (BasePostprocessorConfig, PostprocessPipelineConfig)):
             raise TypeError(
-                f"processor must be a BasePostprocessorConfig instance, "
-                f"got {type(processor).__name__}"
+                f"processor must be a BasePostprocessorConfig instance or "
+                f"PostprocessPipelineConfig, got {type(processor).__name__}"
             )
 
         # Initialize parameters

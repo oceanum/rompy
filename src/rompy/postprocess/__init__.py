@@ -26,8 +26,12 @@ from rompy.core.responses import (
 from .config import (
     BasePostprocessorConfig,
     NoopPostprocessorConfig,
+    PostprocessPipelineConfig,
     ProcessorConfig,
 )
+from .runner import PostprocessPipelineRunner, compose_postprocessors, run_postprocess_pipeline
+from .transfer import TransferPostprocessor, TransferPostprocessorConfig, normalize_destination
+from .conformance import assert_no_sidecar_ownership, assert_step_conforms
 from .protocol import (
     ArtifactReconciliation,
     FailurePolicy,
@@ -53,6 +57,10 @@ __all__ = [
     "ArtifactReconciliation",
     "NoopPostprocessor",
     "NoopPostprocessorConfig",
+    "PostprocessPipelineConfig",
+    "TransferPostprocessor",
+    "TransferPostprocessorConfig",
+    "normalize_destination",
     "BasePostprocessorConfig",
     "ProcessorConfig",
     "FailurePolicy",
@@ -63,6 +71,11 @@ __all__ = [
     "PostprocessStepProtocol",
     "PostprocessorProtocol",
     "ProcessorProtocol",
+    "PostprocessPipelineRunner",
+    "compose_postprocessors",
+    "run_postprocess_pipeline",
+    "assert_step_conforms",
+    "assert_no_sidecar_ownership",
 ]
 
 

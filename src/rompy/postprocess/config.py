@@ -8,9 +8,9 @@ while maintaining type safety and validation.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 if TYPE_CHECKING:
     pass
@@ -130,8 +130,42 @@ class NoopPostprocessorConfig(BasePostprocessorConfig):
     )
 
 
-# Type alias for all postprocessor configurations
-ProcessorConfig = Union[NoopPostprocessorConfig]
+class PostprocessPipelineConfig(BaseModel):
+    """Ordered processor configuration consumed by the core runner.
+
+    Each item is either a validated processor config or a mapping containing a
+    ``type`` field.  Mappings are resolved through the same canonical config
+    entry-point group used by standalone processor configuration files.
+    """
+
+    type: Literal["pipeline"] = "pipeline"
+    steps: list[Any] = Field(default_factory=list, min_length=1)
+    failure_policy: Literal["fail_fast", "continue"] = "fail_fast"
+    operational_state: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    @model_validator(mode="after")
+    def resolve_steps(self):
+        resolved = []
+        for item in self.steps:
+            if isinstance(item, BasePostprocessorConfig):
+                resolved.append(item)
+            elif isinstance(item, dict):
+                resolved.append(_load_processor_config_from_dict(item))
+            else:
+                raise TypeError("pipeline steps must be processor configs or mappings")
+        self.steps = resolved
+        return self
+
+    def build_steps(self):
+        """Build ordered runtime processors without granting sidecar ownership."""
+        return [config.build_processor() for config in self.steps]
+
+
+# Type alias for all standalone postprocessor configurations.  The pipeline
+# config is included so CLI and programmatic callers use one validated seam.
+ProcessorConfig = Union[NoopPostprocessorConfig, PostprocessPipelineConfig]
 
 
 _PROCESSOR_CONFIG_GROUP = "rompy.postprocess.config"
@@ -184,6 +218,17 @@ def _processor_config_entry_points():
     else:
         selected = discovered
     selected = tuple(selected)
+    # Source checkouts and editable installs may have stale distribution
+    # metadata.  Built-ins remain discoverable through the canonical group;
+    # external providers still come exclusively from entry-point metadata.
+    names = {item.name for item in selected}
+    from importlib.metadata import EntryPoint
+    builtins = []
+    if "noop" not in names:
+        builtins.append(EntryPoint("noop", "rompy.postprocess.config:NoopPostprocessorConfig", _PROCESSOR_CONFIG_GROUP))
+    if "transfer" not in names:
+        builtins.append(EntryPoint("transfer", "rompy.postprocess.transfer:TransferPostprocessorConfig", _PROCESSOR_CONFIG_GROUP))
+    selected = selected + tuple(builtins)
 
     by_name = {}
     for entry_point in selected:
@@ -253,7 +298,11 @@ def _load_processor_config(config_file):
     processor_type = config_data.pop("type", None)
 
     if processor_type is None:
+        if "steps" in config_data:
+            return PostprocessPipelineConfig(**config_data)
         raise ValueError("Config file must contain a 'type' field")
+    if processor_type == "pipeline":
+        return PostprocessPipelineConfig(**config_data)
 
     # Load from the canonical config entry-point group.
     eps = _processor_config_entry_points()
@@ -299,7 +348,13 @@ def _load_processor_config_from_dict(config_data: dict) -> BasePostprocessorConf
     processor_type = config_data.pop("type", None)
 
     if processor_type is None:
+        # Pipeline documents intentionally have no processor ``type``; each
+        # ordered item is discovered independently from the canonical group.
+        if "steps" in config_data:
+            return PostprocessPipelineConfig(**config_data)
         raise ValueError("Config must contain a 'type' field")
+    if processor_type == "pipeline":
+        return PostprocessPipelineConfig(**config_data)
 
     # Load from the canonical config entry-point group.
     eps = _processor_config_entry_points()

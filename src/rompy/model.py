@@ -818,11 +818,23 @@ class ModelRun(RompyBaseModel):
                 # Serialize to dict for logging or storage
                 result_dict = result.model_dump()
         """
-        from rompy.postprocess.config import BasePostprocessorConfig
+        from rompy.postprocess.config import BasePostprocessorConfig, PostprocessPipelineConfig
 
         start_time = datetime.now(timezone.utc)
 
         try:
+            if isinstance(processor, PostprocessPipelineConfig):
+                if processor_input is None:
+                    raise TypeError("processor_input must be a validated ModelRunResult")
+                run_result = TypeAdapter(ModelRunResult).validate_python(processor_input)
+                from rompy.postprocess.runner import run_postprocess_pipeline
+                return run_postprocess_pipeline(
+                    run_result,
+                    processor.build_steps(),
+                    staging_dir=self.staging_dir,
+                    failure_policy=processor.failure_policy,
+                    operational_state=processor.operational_state,
+                )
             if not isinstance(processor, BasePostprocessorConfig):
                 raise TypeError(
                     f"processor must be a BasePostprocessorConfig instance, got {type(processor).__name__}"
