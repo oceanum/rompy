@@ -19,6 +19,11 @@ from pydantic import Field, TypeAdapter
 from rompy.backends import BackendConfig
 from rompy.backends.config import BaseBackendConfig
 from rompy.core.config import BaseConfig
+from rompy.core.result_persistence import (
+    GENERATE_RESULT_FILENAME,
+    POSTPROCESS_RESULT_FILENAME,
+    RUN_RESULT_FILENAME,
+)
 from rompy.core.responses import (
     GenerateFailure,
     GenerateResult,
@@ -43,6 +48,22 @@ from rompy.utils import load_entry_points
 
 # Initialize the logger
 logger = get_logger(__name__)
+
+_RESERVED_PERSISTENCE_FILES = {
+    GENERATE_RESULT_FILENAME,
+    RUN_RESULT_FILENAME,
+    POSTPROCESS_RESULT_FILENAME,
+}
+
+
+def _model_files(staging_dir: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(staging_dir.rglob("*"), key=lambda item: str(item))
+        if path.is_file()
+        and path.name not in _RESERVED_PERSISTENCE_FILES
+        and ".rompy-postprocess" not in path.relative_to(staging_dir).parts
+    ]
 
 
 # Accepted config types are defined in the entry points of the rompy.config group
@@ -197,23 +218,7 @@ class ModelRun(RompyBaseModel):
         Returns empty string if no files exist or on any IO error.
         """
         try:
-            from rompy.core.result_persistence import (
-                GENERATE_RESULT_FILENAME,
-                POSTPROCESS_RESULT_FILENAME,
-                RUN_RESULT_FILENAME,
-            )
-
-            reserved_sidecars = {
-                GENERATE_RESULT_FILENAME,
-                RUN_RESULT_FILENAME,
-                POSTPROCESS_RESULT_FILENAME,
-            }
-            files = sorted(staging_dir.iterdir(), key=lambda f: str(f))
-            files = [
-                f
-                for f in files
-                if f.is_file() and f.name not in reserved_sidecars
-            ]
+            files = _model_files(staging_dir)
 
             if not files:
                 return ""
@@ -360,22 +365,9 @@ class ModelRun(RompyBaseModel):
             )
             logger.info(f"Model files generated at: {self.staging_dir}")
 
-            from rompy.core.result_persistence import (
-                GENERATE_RESULT_FILENAME,
-                POSTPROCESS_RESULT_FILENAME,
-                RUN_RESULT_FILENAME,
-            )
-            reserved_sidecars = {
-                GENERATE_RESULT_FILENAME,
-                RUN_RESULT_FILENAME,
-                POSTPROCESS_RESULT_FILENAME,
-            }
             generated_files = [
                 str(f.relative_to(self.staging_dir).as_posix())
-                for f in self.staging_dir.rglob("*")
-                if f.is_file()
-                and f.name not in reserved_sidecars
-                and ".rompy-postprocess" not in f.relative_to(self.staging_dir).parts
+                for f in _model_files(self.staging_dir)
             ]
             result = GenerateSuccess(
                 run_id=self.run_id,
@@ -405,7 +397,7 @@ class ModelRun(RompyBaseModel):
                 run_id=self.run_id,
                 error=_exception_message(e, "model generation failed"),
                 generated_files=(
-                    [str(f.relative_to(staging_dir).as_posix()) for f in staging_dir.rglob("*") if f.is_file()]
+                    [str(f.relative_to(staging_dir).as_posix()) for f in _model_files(staging_dir)]
                     if staging_dir is not None and staging_dir.exists() else []
                 ),
                 timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
