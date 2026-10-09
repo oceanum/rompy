@@ -81,6 +81,44 @@ class RecordingConfig(BasePostprocessorConfig):
         return RecordingProcessor
 
 
+def test_context_processor_receives_output_dir_without_cli_options(tmp_path):
+    override = tmp_path / "override"
+
+    class ContextProcessor:
+        input_protocol = "context"
+
+        def __init__(self, config):
+            self.config = config
+
+        def process(self, context):
+            return PostprocessSuccess(
+                run_id=context.run_result.run_id,
+                output_dir=str(context.output_dir),
+                validated=True,
+                timing=timing(),
+                artifacts=list(context.artifacts),
+                expected_outputs=list(context.expected_outputs),
+                missing_outputs=list(context.missing_outputs),
+            )
+
+    class ContextConfig(BasePostprocessorConfig):
+        type: str = "context"
+
+        def get_postprocessor_class(self):
+            return ContextProcessor
+
+    model = ModelRun(run_id="run-5", output_dir=tmp_path)
+    result = model.postprocess(
+        ContextConfig(),
+        processor_input=run_success(tmp_path),
+        output_dir=override,
+        validate_outputs=True,
+    )
+
+    assert isinstance(result, PostprocessSuccess)
+    assert result.output_dir == str(override)
+
+
 def test_processor_constructor_and_exact_typed_input(tmp_path):
     model = ModelRun(run_id="run-5", output_dir=tmp_path)
     source = run_success(tmp_path)

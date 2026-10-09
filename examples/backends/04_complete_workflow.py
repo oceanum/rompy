@@ -41,6 +41,9 @@ class FileInfoPostprocessor:
                 run_id=run_result.run_id,
                 output_dir=str(output_dir),
                 error=f"Output directory not found: {output_dir}",
+                artifacts=[],
+                expected_outputs=list(run_result.expected_outputs),
+                missing_outputs=list(run_result.missing_outputs),
                 timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
             )
 

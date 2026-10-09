@@ -884,7 +884,12 @@ class ModelRun(RompyBaseModel):
                     staging_dir=self.staging_dir,
                     output_dir=kwargs.get("output_dir"),
                 )
-                result = processor_instance.process(context, **process_options)
+                context_options = {
+                    key: value
+                    for key, value in process_options.items()
+                    if key not in {"output_dir", "validate_outputs", "staging_dir"}
+                }
+                result = processor_instance.process(context, **context_options)
             else:
                 # Unmarked plugins are the legacy public ModelRunResult seam;
                 # their class or entry-point name is not part of dispatch.
