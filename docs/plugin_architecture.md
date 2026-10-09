@@ -172,7 +172,7 @@ from rompy.core.responses import PostprocessResult
 
 # Basic validation
 config = NoopPostprocessorConfig(validate_outputs=True)
-results: PostprocessResult = model.postprocess(processor=config)
+results: PostprocessResult = model.postprocess(processor=config, processor_input=run_result)
 
 # Use type narrowing for safe field access
 if results.success:
@@ -192,7 +192,7 @@ config = NoopPostprocessorConfig(
     timeout=3600,
     env_vars={"DEBUG": "1"}
 )
-results = model.postprocess(processor=config)
+results = model.postprocess(processor=config, processor_input=run_result)
 ```
 
 **From Configuration File:**
@@ -212,7 +212,7 @@ from rompy.postprocess.config import _load_processor_config
 
 # Load from file
 config = _load_processor_config("processor.yml")
-results = model.postprocess(processor=config)
+results = model.postprocess(processor=config, processor_input=run_result)
 ```
 
 ### Custom Postprocessor Configurations
@@ -381,7 +381,7 @@ config = AnalysisPostprocessorConfig(
 # Use in model workflow
 model = ModelRun.from_file("model.yml")
 model.run(backend=backend_config)
-results = model.postprocess(processor=config)
+results = model.postprocess(processor=config, processor_input=run_result)
 
 if results["success"]:
     print(f"Calculated metrics: {results['metrics']}")

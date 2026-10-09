@@ -34,6 +34,11 @@ def test_base_validate_outputs_warns_and_discovers_artifacts(tmp_path):
     (tmp_path / "c.png").write_text("x")
     (tmp_path / "d.txt").write_text("x")
     (tmp_path / "e.bin").write_text("x")
+    for name in ("generate_result.json", "run_result.json", "postprocess_result.json"):
+        (tmp_path / name).write_text("{}")
+    state_dir = tmp_path / ".rompy-postprocess" / "transfer"
+    state_dir.mkdir(parents=True)
+    (state_dir / "transfer-state.json").write_text("{}")
 
     config = BaseConfig()
     with pytest.warns(UserWarning) as warning_records:
@@ -43,11 +48,18 @@ def test_base_validate_outputs_warns_and_discovers_artifacts(tmp_path):
     assert any("expected_artifacts" in str(w.message) for w in warning_records)
 
     by_name = {Path(a.path).name: a for a in artifacts}
+    reserved_names = {
+        "generate_result.json",
+        "run_result.json",
+        "postprocess_result.json",
+        "transfer-state.json",
+    }
     assert by_name["a.yaml"].artifact_type == ArtifactType.YAML
     assert by_name["b.nc"].artifact_type == ArtifactType.NETCDF
     assert by_name["c.png"].artifact_type == ArtifactType.PLOT
     assert by_name["d.txt"].artifact_type == ArtifactType.TEXT
     assert by_name["e.bin"].artifact_type == ArtifactType.OTHER
+    assert not reserved_names.intersection(by_name)
     assert all(a.size_bytes is not None for a in artifacts)
 
 

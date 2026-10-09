@@ -442,7 +442,7 @@ config = NoopPostprocessorConfig(
     env_vars={"DEBUG": "1"}
 )
 
-results = model_run.postprocess(processor=config)
+results = model_run.postprocess(processor=config, processor_input=run_result)
 ```
 
 **Key Parameters:**
@@ -466,7 +466,7 @@ config = NoopPostprocessorConfig(
 )
 
 # Use in postprocessing
-results = model_run.postprocess(processor=config)
+results = model_run.postprocess(processor=config, processor_input=run_result)
 
 if results["success"]:
     print("Post-processing completed")
@@ -483,7 +483,7 @@ from rompy.postprocess.config import _load_processor_config
 config = _load_processor_config("processor.yml")
 
 # Use configuration
-results = model_run.postprocess(processor=config)
+results = model_run.postprocess(processor=config, processor_input=run_result)
 ```
 
 **CLI Usage:**
@@ -671,7 +671,7 @@ config = AnalysisPostprocessorConfig(
     plot_config={"figsize": (10, 8), "dpi": 300}
 )
 
-success = model_run.postprocess(processor=config)
+success = model_run.postprocess(processor=config, processor_input=run_result)
 ```
 
 ### Configuration Validation
@@ -946,7 +946,7 @@ def test_full_workflow():
 
     # Test full workflow
     success = model_run.run(backend=config)
-    results = model_run.postprocess(processor="archive")
+    results = model_run.postprocess(processor=processor_config, processor_input=run_result)
 
     assert success is True
     assert results["success"] is True

@@ -1,6 +1,7 @@
 """Model-neutral, retry-safe transfer postprocessor."""
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -146,30 +147,15 @@ class TransferPostprocessor:
         root, path, state_path = self._state_paths(context)
         root.mkdir(parents=True, exist_ok=True)
         path.parent.mkdir(parents=True, exist_ok=True)
-        while True:
-            try:
-                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError as exc:
-                try:
-                    owner_pid = int(path.read_text().strip())
-                except (OSError, ValueError):
-                    raise RuntimeError("transfer state is locked") from exc
-                try:
-                    os.kill(owner_pid, 0)
-                except ProcessLookupError:
-                    try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        pass
-                    continue
-                except PermissionError:
-                    raise RuntimeError("transfer state is locked") from exc
-                raise RuntimeError("transfer state is locked") from exc
-            try:
-                os.write(fd, f"{os.getpid()}\n".encode())
-            finally:
-                os.close(fd)
-            return path, state_path
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            raise RuntimeError("transfer state is locked") from exc
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+        return path, state_path, fd
 
     @staticmethod
     def _load_state(path: Path) -> dict[str, dict[str, Any]]:
@@ -205,8 +191,9 @@ class TransferPostprocessor:
         start = datetime.now(timezone.utc)
         destinations = tuple(str(item) for item in self.config.destinations)
         lock = None
+        lock_fd = None
         try:
-            lock, state_path = self._lock(context)
+            lock, state_path, lock_fd = self._lock(context)
             replay_state = self._load_state(state_path)
             # Disk state is the authority for a fresh process.  In-process
             # retries use this processor's redacted updates; arbitrary caller
@@ -383,6 +370,9 @@ class TransferPostprocessor:
                 timing=timing,
             )
         finally:
+            if lock_fd is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
             if lock is not None:
                 try:
                     lock.unlink()

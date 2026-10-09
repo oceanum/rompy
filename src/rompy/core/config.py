@@ -143,15 +143,26 @@ class BaseConfig(RompyBaseModel):
         }
 
         artifacts = []
+        reserved_sidecars = {
+            "generate_result.json",
+            "run_result.json",
+            "postprocess_result.json",
+        }
         if output_dir.exists():
             for file_path in output_dir.rglob("*"):
                 if not file_path.is_file():
+                    continue
+                relative_path = file_path.relative_to(output_dir)
+                if (
+                    file_path.name in reserved_sidecars
+                    or ".rompy-postprocess" in relative_path.parts
+                ):
                     continue
                 suffix = file_path.suffix.lower()
                 artifact_type = _EXT_MAP.get(suffix, ArtifactType.OTHER)
                 artifacts.append(
                     Artifact(
-                        path=file_path.relative_to(output_dir).as_posix(),
+                        path=relative_path.as_posix(),
                         artifact_type=artifact_type,
                         size_bytes=file_path.stat().st_size,
                     )

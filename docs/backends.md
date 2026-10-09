@@ -515,7 +515,7 @@ from rompy.postprocess.config import NoopPostprocessorConfig
 
 # Basic post-processing with configuration
 processor_config = NoopPostprocessorConfig(validate_outputs=True)
-results = model_run.postprocess(processor=processor_config)
+results = model_run.postprocess(processor=processor_config, processor_input=run_result)
 
 # Custom post-processing with advanced options
 processor_config = NoopPostprocessorConfig(
@@ -523,7 +523,7 @@ processor_config = NoopPostprocessorConfig(
     timeout=7200,
     env_vars={"DEBUG": "1"}
 )
-results = model_run.postprocess(processor=processor_config)
+results = model_run.postprocess(processor=processor_config, processor_input=run_result)
 ```
 
 For postprocessor configuration details, see [Postprocessor Configuration](#postprocessor-configuration).
@@ -611,7 +611,7 @@ processor_config = NoopPostprocessorConfig(
     validate_outputs=True,
     timeout=3600
 )
-results = model_run.postprocess(processor=processor_config)
+results = model_run.postprocess(processor=processor_config, processor_input=run_result)
 
 if results["success"]:
     print("Post-processing completed successfully")
@@ -630,7 +630,7 @@ from rompy.postprocess.config import _load_processor_config
 processor_config = _load_processor_config("processor.yml")
 
 # Use configuration
-results = model_run.postprocess(processor=processor_config)
+results = model_run.postprocess(processor=processor_config, processor_input=run_result)
 ```
 
 ### Configuration File Format

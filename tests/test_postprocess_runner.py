@@ -1,5 +1,7 @@
 """Focused coverage for ordered composition and generic transfer."""
+import fcntl
 import json
+import os
 from datetime import datetime, timezone
 
 import pytest
@@ -267,9 +269,11 @@ def test_stale_transfer_lock_is_reclaimed(tmp_path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text("2147483647\n")
 
-    acquired, _ = processor._lock(context)
+    acquired, _, lock_fd = processor._lock(context)
     assert acquired == lock_path
     assert acquired.read_text() != "2147483647\n"
+    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    os.close(lock_fd)
     acquired.unlink()
 
 
