@@ -856,6 +856,7 @@ class ModelRun(RompyBaseModel):
                     run_result,
                     processor.build_steps(),
                     staging_dir=self.staging_dir,
+                    output_dir=kwargs.get("output_dir"),
                     failure_policy=processor.failure_policy,
                     operational_state=processor.operational_state,
                 )

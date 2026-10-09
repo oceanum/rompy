@@ -22,6 +22,7 @@ from rompy.core.responses import (
 )
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
+from rompy.postprocess.config import BasePostprocessorConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 # 1. Define a custom postprocessor
 class FileInfoPostprocessor:
     """Custom postprocessor returning the typed core result contract."""
+
+    def __init__(self, config):
+        self.config = config
 
     def process(self, run_result: ModelRunSuccess):
         """Collect output-file metadata from a successful model run."""
@@ -70,6 +74,14 @@ class FileInfoPostprocessor:
             timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
         )
 
+
+class FileInfoPostprocessorConfig(BasePostprocessorConfig):
+    type: str = "file_info"
+
+    def get_postprocessor_class(self):
+        return FileInfoPostprocessor
+
+
 def main():
     """Run a complete workflow with custom backend and postprocessor."""
     # Create a model run
@@ -100,8 +112,9 @@ def main():
 
     # 2. Process with custom postprocessor
     logger.info("Running custom postprocessor...")
-    postprocessor = FileInfoPostprocessor()
-    results = postprocessor.process(success)
+    results = model.postprocess(
+        processor=FileInfoPostprocessorConfig(), processor_input=success
+    )
 
     if results.success:
         logger.info(f"Successfully processed {len(results.artifacts)} files")

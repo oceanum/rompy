@@ -52,6 +52,7 @@ def run_postprocess_pipeline(
     steps: Iterable[PostprocessStep],
     *,
     staging_dir: Path | str | None = None,
+    output_dir: Path | str | None = None,
     failure_policy: PostprocessFailurePolicy = PostprocessFailurePolicy.FAIL_FAST,
     operational_state: Mapping[str, Mapping[str, object]] | None = None,
 ) -> PostprocessResultValue:
@@ -74,6 +75,7 @@ def run_postprocess_pipeline(
     context = PostprocessContext.from_run_result(
         run_result,
         staging_dir=staging_dir,
+        output_dir=output_dir,
         failure_policy=policy,
         operational_state=operational_state or {},
     )
