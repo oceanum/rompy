@@ -610,7 +610,7 @@ def pipeline(
       type: local
       timeout: 7200
     postprocessor:    # Postprocessor configuration (or use --processor-config)
-      type: ww3_transfer
+      type: transfer
       destinations: [...]
 
     Sections can use !include to reference external files:

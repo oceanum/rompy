@@ -172,7 +172,7 @@ Published examples:
 Run postprocessing on existing model outputs.
 
 ```bash
-rompy postprocess [<config-file>] --processor-config <processor-config-file> [OPTIONS]
+rompy postprocess <staging-dir-or-run-result.json> --processor-config <processor-config-file> [OPTIONS]
 ```
 
 **Options:**
@@ -180,18 +180,14 @@ rompy postprocess [<config-file>] --processor-config <processor-config-file> [OP
 `--processor-config PATH`
 : **Required.** YAML/JSON file with postprocessor configuration
 
-`--config-from-env`
-: Load configuration from ROMPY_CONFIG environment variable instead of file
-
 **Examples:**
 
 ```bash
-# Run postprocessing with config file
-rompy postprocess model_config.yml --processor-config processor.yml
+# Run postprocessing from a staging directory
+rompy postprocess simulations/run-001 --processor-config processor.yml
 
-# Use environment variable for model config
-export ROMPY_CONFIG="$(cat model_config.yml)"
-rompy postprocess --config-from-env --processor-config processor.yml
+# Run postprocessing from a direct sidecar path
+rompy postprocess simulations/run-001/run_result.json --processor-config processor.yml
 ```
 
 ### generate

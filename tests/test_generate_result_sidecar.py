@@ -67,6 +67,31 @@ def test_generate_writes_sidecar_on_success(tmp_model_run):
         assert "input.dat" in sidecar.payload.generated_files
 
 
+def test_generate_sidecar_excludes_persistence_files(tmp_model_run):
+    with patch.object(tmp_model_run.config.__class__, "render", return_value=None):
+        staging_dir = tmp_model_run.staging_dir
+        (staging_dir / "config.nml").write_text("config")
+        for name in ("run_result.json", "postprocess_result.json"):
+            (staging_dir / name).write_text("{}")
+        state_dir = staging_dir / ".rompy-postprocess" / "transfer"
+        state_dir.mkdir(parents=True)
+        (state_dir / "transfer-state.json").write_text("{}")
+
+        tmp_model_run.generate()
+
+        sidecar = load_generate_result(staging_dir)
+        assert "config.nml" in sidecar.payload.generated_files
+        assert all(
+            name not in sidecar.payload.generated_files
+            for name in (
+                "generate_result.json",
+                "run_result.json",
+                "postprocess_result.json",
+                "transfer-state.json",
+            )
+        )
+
+
 def test_generate_sidecar_contains_all_generated_files(tmp_model_run):
     """Test that generated_files list contains all files in staging_dir."""
     with patch.object(tmp_model_run.config.__class__, "render", return_value=None):
@@ -291,6 +316,11 @@ def test_generate_config_hash_deterministic(tmp_model_run):
 
         (staging_dir / "file1.txt").write_text("content1")
         (staging_dir / "file2.txt").write_text("content2")
+        (staging_dir / "run_result.json").write_text("changed")
+        (staging_dir / "postprocess_result.json").write_text("changed")
+        state_dir = staging_dir / ".rompy-postprocess" / "transfer"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "transfer-state.json").write_text("changed")
 
         tmp_model_run.generate()
         sidecar2 = load_generate_result(staging_dir)

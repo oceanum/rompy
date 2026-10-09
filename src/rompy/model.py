@@ -197,11 +197,22 @@ class ModelRun(RompyBaseModel):
         Returns empty string if no files exist or on any IO error.
         """
         try:
-            from rompy.core.result_persistence import GENERATE_RESULT_FILENAME
+            from rompy.core.result_persistence import (
+                GENERATE_RESULT_FILENAME,
+                POSTPROCESS_RESULT_FILENAME,
+                RUN_RESULT_FILENAME,
+            )
 
+            reserved_sidecars = {
+                GENERATE_RESULT_FILENAME,
+                RUN_RESULT_FILENAME,
+                POSTPROCESS_RESULT_FILENAME,
+            }
             files = sorted(staging_dir.iterdir(), key=lambda f: str(f))
             files = [
-                f for f in files if f.is_file() and f.name != GENERATE_RESULT_FILENAME
+                f
+                for f in files
+                if f.is_file() and f.name not in reserved_sidecars
             ]
 
             if not files:
@@ -349,10 +360,22 @@ class ModelRun(RompyBaseModel):
             )
             logger.info(f"Model files generated at: {self.staging_dir}")
 
+            from rompy.core.result_persistence import (
+                GENERATE_RESULT_FILENAME,
+                POSTPROCESS_RESULT_FILENAME,
+                RUN_RESULT_FILENAME,
+            )
+            reserved_sidecars = {
+                GENERATE_RESULT_FILENAME,
+                RUN_RESULT_FILENAME,
+                POSTPROCESS_RESULT_FILENAME,
+            }
             generated_files = [
                 str(f.relative_to(self.staging_dir).as_posix())
                 for f in self.staging_dir.rglob("*")
                 if f.is_file()
+                and f.name not in reserved_sidecars
+                and ".rompy-postprocess" not in f.relative_to(self.staging_dir).parts
             ]
             result = GenerateSuccess(
                 run_id=self.run_id,
