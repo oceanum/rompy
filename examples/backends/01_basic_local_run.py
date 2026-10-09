@@ -41,7 +41,7 @@ def main():
         command="echo 'Model execution completed'",  # Simple test command
     )
     success = model.run(backend=local_config)
-    logger.info(f"Model run {'succeeded' if success else 'failed'}")
+    logger.info(f"Model run {'succeeded' if success.success else 'failed'}")
 
     # Postprocess the results (no-op by default)
     logger.info("Running postprocessing...")

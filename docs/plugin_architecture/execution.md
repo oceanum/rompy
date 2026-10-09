@@ -187,9 +187,8 @@ results = model.pipeline(pipeline_backend="local")
 # With custom backends
 results = model.pipeline(
     pipeline_backend="local",
-    run_backend="docker",
-    processor="analysis",
-    run_kwargs={"image": "rompy/model:latest", "cpu": 4},
+    backend_config=DockerConfig(image="rompy/model:latest", cpu=4),
+    processor=AnalysisPostprocessorConfig(),
     process_kwargs={"create_plots": True},
     cleanup_on_failure=True
 )

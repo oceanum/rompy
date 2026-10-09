@@ -433,9 +433,8 @@ processor_config = NoopPostprocessorConfig(
 
 results = model.pipeline(
     pipeline_backend="local",
-    run_backend="docker",
-    processor_config=processor_config,
-    run_kwargs={"image": "rompy/model:latest", "cpu": 4},
+    backend_config=DockerConfig(image="rompy/model:latest", cpu=4),
+    processor=processor_config,
     cleanup_on_failure=True
 )
 ```

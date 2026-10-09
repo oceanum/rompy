@@ -65,7 +65,7 @@ def example_local_basic():
 
         try:
             success = model.run(backend=config)
-            logger.info(f"✅ Model run {'succeeded' if success else 'failed'}")
+            logger.info(f"✅ Model run {'succeeded' if success.success else 'failed'}")
             logger.info("Key concepts: LocalConfig, timeout, command execution")
         except Exception as e:
             logger.error(f"❌ Model run failed: {e}")
@@ -117,7 +117,7 @@ def example_local_advanced():
 
         try:
             success = model.run(backend=config)
-            logger.info(f"✅ Model run {'succeeded' if success else 'failed'}")
+            logger.info(f"✅ Model run {'succeeded' if success.success else 'failed'}")
             logger.info("Key concepts: env_vars, shell=True, capture_output")
         except Exception as e:
             logger.error(f"❌ Model run failed: {e}")
@@ -163,7 +163,7 @@ def example_docker_basic():
 
         try:
             success = model.run(backend=config)
-            logger.info(f"✅ Model run {'succeeded' if success else 'failed'}")
+            logger.info(f"✅ Model run {'succeeded' if success.success else 'failed'}")
             logger.info("Key concepts: DockerConfig, image, cpu/memory limits, volumes")
         except Exception as e:
             logger.error(f"❌ Model run failed: {e}")
@@ -220,7 +220,7 @@ def example_docker_advanced():
 
         try:
             success = model.run(backend=config)
-            logger.info(f"✅ Model run {'succeeded' if success else 'failed'}")
+            logger.info(f"✅ Model run {'succeeded' if success.success else 'failed'}")
             logger.info(
                 "Key concepts: multiple volumes, resource allocation, container management"
             )
@@ -369,9 +369,9 @@ def example_postprocessing():
         logger.info("Step 1: Running model...")
         try:
             success = model.run(backend=config)
-            logger.info(f"✅ Model run {'succeeded' if success else 'failed'}")
+            logger.info(f"✅ Model run {'succeeded' if success.success else 'failed'}")
 
-            if success:
+            if success.success:
                 # Run postprocessing
                 logger.info("Step 2: Running postprocessing...")
                 results = model.postprocess(

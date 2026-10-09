@@ -793,15 +793,15 @@ processor_config = NoopPostprocessorConfig(
 # Execute pipeline
 results = pipeline.execute(
     model_run=model_run,
-    run_backend=run_config,
-    processor_config=processor_config,
+    backend_config=run_config,
+    processor=processor_config,
     cleanup_on_failure=False
 )
 
-if results["success"]:
-    print(f"Pipeline completed: {results['stages_completed']}")
+if results.success:
+    print(f"Pipeline completed: {results.stages_completed}")
 else:
-    print(f"Pipeline failed: {results.get('error')}")
+    print(f"Pipeline failed: {results.error}")
 ```
 
 ## Best Practices
