@@ -8,11 +8,18 @@ This example demonstrates how to:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
 
 from rompy.backends import LocalConfig
+from rompy.core.responses import (
+    Artifact,
+    ArtifactType,
+    ModelRunSuccess,
+    PostprocessFailure,
+    PostprocessSuccess,
+    TimingInfo,
+)
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
 
@@ -23,62 +30,42 @@ logger = logging.getLogger(__name__)
 
 # 1. Define a custom postprocessor
 class FileInfoPostprocessor:
-    """Custom postprocessor that collects information about output files.
+    """Custom postprocessor returning the typed core result contract."""
 
-    This class implements the postprocessor interface by providing a process() method
-    that takes a model_run instance and returns a dictionary with results.
-    """
-
-    def process(self, model_run, **kwargs) -> Dict[str, Any]:
-        """Collect information about output files.
-
-        Args:
-            model_run: The ModelRun instance
-            **kwargs: Additional parameters
-
-        Returns:
-            Dictionary with file information
-        """
-        output_dir = Path(model_run.output_dir) / model_run.run_id
-
+    def process(self, run_result: ModelRunSuccess):
+        """Collect output-file metadata from a successful model run."""
+        start_time = datetime.now(timezone.utc)
+        output_dir = Path(run_result.output_dir or "")
         if not output_dir.exists():
-            return {
-                "success": False,
-                "message": f"Output directory not found: {output_dir}",
-            }
+            return PostprocessFailure(
+                run_id=run_result.run_id,
+                output_dir=str(output_dir),
+                error=f"Output directory not found: {output_dir}",
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
+            )
 
-        try:
-            file_info = {}
-            total_size = 0
+        artifacts = []
+        for file_path in output_dir.rglob("*"):
+            if file_path.is_file():
+                artifacts.append(
+                    Artifact(
+                        path=file_path.relative_to(output_dir).as_posix(),
+                        artifact_type=ArtifactType.OTHER,
+                        size_bytes=file_path.stat().st_size,
+                    )
+                )
 
-            for file_path in output_dir.rglob("*"):
-                if file_path.is_file():
-                    file_size = file_path.stat().st_size
-                    file_info[str(file_path.relative_to(output_dir))] = {
-                        "size_bytes": file_size,
-                        "size_mb": file_size / (1024 * 1024),
-                        "modified": datetime.fromtimestamp(
-                            file_path.stat().st_mtime
-                        ).isoformat(),
-                    }
-                    total_size += file_size
-
-            return {
-                "success": True,
-                "message": f"Collected info for {len(file_info)} files",
-                "output_dir": str(output_dir),
-                "total_size_bytes": total_size,
-                "total_size_mb": total_size / (1024 * 1024),
-                "files": file_info,
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Failed to collect file info: {str(e)}",
-                "error": str(e),
-            }
-
+        return PostprocessSuccess(
+            run_id=run_result.run_id,
+            output_dir=str(output_dir),
+            validated=True,
+            artifacts=artifacts,
+            expected_outputs=list(run_result.expected_outputs),
+            missing_outputs=list(run_result.missing_outputs),
+            file_count=len(artifacts),
+            metadata={"file_count": len(artifacts)},
+            timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
+        )
 
 def main():
     """Run a complete workflow with custom backend and postprocessor."""
@@ -104,25 +91,20 @@ def main():
     )
     success = model.run(backend=local_config)
 
-    if not success:
+    if not success.success:
         logger.error("Model run failed")
         return
 
     # 2. Process with custom postprocessor
     logger.info("Running custom postprocessor...")
     postprocessor = FileInfoPostprocessor()
-    results = postprocessor.process(model)
+    results = postprocessor.process(success)
 
-    if results["success"]:
-        logger.info(f"Successfully processed {len(results['files'])} files")
-        logger.info(f"Total output size: {results['total_size_mb']:.2f} MB")
-        logger.info("Files created:")
-        for file_path, info in results["files"].items():
-            logger.info(f"  - {file_path} ({info['size_mb']:.2f} MB)")
+    if results.success:
+        logger.info(f"Successfully processed {len(results.artifacts)} files")
+        logger.info(f"Metadata: {results.metadata}")
     else:
-        logger.error(
-            f"Postprocessing failed: {results.get('message', 'Unknown error')}"
-        )
+        logger.error(f"Postprocessing failed: {results.error}")
 
 
 if __name__ == "__main__":

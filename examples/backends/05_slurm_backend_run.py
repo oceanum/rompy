@@ -70,7 +70,7 @@ def example_slurm_basic():
         try:
             # Submit the job to SLURM (in a real environment)
             success = model.run(backend=config)
-            if success:
+            if success.success:
                 logger.info("✅ SLURM job submitted successfully")
             else:
                 logger.info(
@@ -141,7 +141,7 @@ def example_slurm_advanced():
 
         try:
             success = model.run(backend=config)
-            if success:
+            if success.success:
                 logger.info("✅ Advanced SLURM job submitted successfully")
             else:
                 logger.info(
@@ -195,7 +195,7 @@ def example_slurm_with_custom_command():
 
         try:
             success = model.run(backend=config)
-            if success:
+            if success.success:
                 logger.info("✅ SLURM job with custom command submitted successfully")
             else:
                 logger.info(

@@ -613,10 +613,10 @@ processor_config = NoopPostprocessorConfig(
 )
 results = model_run.postprocess(processor=processor_config, processor_input=run_result)
 
-if results["success"]:
+if results.success:
     print("Post-processing completed successfully")
 else:
-    print(f"Post-processing failed: {results.get('error')}")
+    print(f"Post-processing failed: {results.error}")
 ```
 
 #### From Configuration Files
@@ -911,10 +911,10 @@ results = pipeline.execute(
     validate_stages=True,
 )
 
-if results["success"]:
-    print(f"Pipeline completed. Stages: {results['stages_completed']}")
+if results.success:
+    print(f"Pipeline completed. Stages: {results.stages_completed}")
 else:
-    print(f"Pipeline failed during: {results['stage']}")
+    print(f"Pipeline failed during: {results.failed_stage}")
 ```
 
 Notes:

@@ -468,10 +468,10 @@ config = NoopPostprocessorConfig(
 # Use in postprocessing
 results = model_run.postprocess(processor=config, processor_input=run_result)
 
-if results["success"]:
+if results.success:
     print("Post-processing completed")
 else:
-    print(f"Post-processing failed: {results.get('error')}")
+    print(f"Post-processing failed: {results.error}")
 ```
 
 **From Configuration Files:**
@@ -946,10 +946,12 @@ def test_full_workflow():
 
     # Test full workflow
     success = model_run.run(backend=config)
-    results = model_run.postprocess(processor=processor_config, processor_input=run_result)
+    results = model_run.postprocess(
+        processor=NoopPostprocessorConfig(), processor_input=success
+    )
 
-    assert success is True
-    assert results["success"] is True
+    assert success.success is True
+    assert results.success is True
 ```
 
 For comprehensive testing examples, see the test suite in `tests/backends/`.

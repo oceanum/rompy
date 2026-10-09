@@ -383,9 +383,9 @@ model = ModelRun.from_file("model.yml")
 model.run(backend=backend_config)
 results = model.postprocess(processor=config, processor_input=run_result)
 
-if results["success"]:
-    print(f"Calculated metrics: {results['metrics']}")
-    print(f"Generated plots: {results['plots']}")
+if results.success:
+    print(f"Generated artifacts: {len(results.artifacts)}")
+    print(f"Metadata: {results.metadata}")
 ```
 
 **CLI Usage:**
@@ -447,50 +447,22 @@ Create custom pipeline backends for distributed or cloud execution:
 class CloudPipelineBackend:
     """Pipeline backend for cloud execution."""
 
-    def execute(self, model_run, run_backend, processor_config, **kwargs):
+    def execute(self, model_run, backend_config, processor, **kwargs):
         """Execute the complete pipeline.
 
         Args:
             model_run: The ModelRun instance
-            run_backend: Backend configuration for model execution
-            processor_config: BasePostprocessorConfig instance for postprocessing
+            backend_config: Backend configuration for model execution
+            processor: BasePostprocessorConfig instance for postprocessing
             **kwargs: Pipeline-specific parameters
 
         Returns:
-            dict: Pipeline execution results
+            PipelineResult: Typed pipeline success or failure envelope.
+
+        The implementation must return ``PipelineSuccess`` or ``PipelineFailure``;
+        do not return an untyped dictionary. Use the built-in local pipeline as the
+        reference for stage ordering and failure propagation.
         """
-        results = {
-            "success": False,
-            "run_id": model_run.run_id,
-            "stages_completed": []
-        }
-
-        try:
-            # Stage 1: Generate inputs
-            model_run.generate()
-            results["stages_completed"].append("generate")
-
-            # Stage 2: Submit to cloud
-            job_id = self._submit_cloud_job(model_run, run_backend, **kwargs)
-            results["job_id"] = job_id
-            results["stages_completed"].append("submit")
-
-            # Stage 3: Wait for completion
-            self._wait_for_completion(job_id)
-            results["stages_completed"].append("execute")
-
-            # Stage 4: Download and process results with configuration
-            outputs = self._download_results(job_id)
-            processed = self._process_outputs(outputs, processor_config)
-            results["outputs"] = processed
-            results["stages_completed"].append("postprocess")
-
-            results["success"] = True
-            return results
-
-        except Exception as e:
-            results["error"] = str(e)
-            return results
 ```
 
 ## Best Practices
@@ -498,7 +470,7 @@ class CloudPipelineBackend:
 ### Error Handling
 
 - Always wrap main logic in try-catch blocks
-- Return appropriate boolean/dict responses
+- Return typed success/failure result envelopes
 - Log errors with sufficient detail for debugging
 - Clean up resources on failure when possible
 

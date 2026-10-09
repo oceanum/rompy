@@ -58,7 +58,7 @@ def main():
     )
     success = model.run(backend=docker_config)
 
-    logger.info(f"Model run {'succeeded' if success else 'failed'}")
+    logger.info(f"Model run {'succeeded' if success.success else 'failed'}")
 
 
 if __name__ == "__main__":

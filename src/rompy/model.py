@@ -225,6 +225,9 @@ class ModelRun(RompyBaseModel):
 
             hasher = hashlib.sha256()
             for file_path in files:
+                relative_path = file_path.relative_to(staging_dir).as_posix()
+                hasher.update(relative_path.encode("utf-8"))
+                hasher.update(b"\0")
                 hasher.update(file_path.read_bytes())
 
             return hasher.hexdigest()
