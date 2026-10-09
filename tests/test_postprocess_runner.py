@@ -1,5 +1,4 @@
 """Focused coverage for ordered composition and generic transfer."""
-import fcntl
 import json
 import os
 from datetime import datetime, timezone
@@ -21,6 +20,7 @@ from rompy.postprocess.runner import run_postprocess_pipeline
 from rompy.postprocess.transfer import (
     TransferPostprocessor,
     TransferPostprocessorConfig,
+    _release_lock,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -272,7 +272,7 @@ def test_stale_transfer_lock_is_reclaimed(tmp_path):
     acquired, _, lock_fd = processor._lock(context)
     assert acquired == lock_path
     assert acquired.read_text() != "2147483647\n"
-    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    _release_lock(lock_fd)
     os.close(lock_fd)
 
 

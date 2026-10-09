@@ -1,7 +1,6 @@
 """Model-neutral, retry-safe transfer postprocessor."""
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised on Windows
+    fcntl = None
 
 from pydantic import Field, field_validator, model_validator
 
@@ -31,6 +35,32 @@ from .protocol import (
     PostprocessFailurePolicy,
     validate_state_namespace,
 )
+
+
+def _acquire_lock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+
+    import msvcrt  # type: ignore[import-not-found]  # pragma: no cover
+
+    os.ftruncate(fd, 1)
+    os.lseek(fd, 0, os.SEEK_SET)
+    try:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    except OSError as exc:
+        raise BlockingIOError from exc
+
+
+def _release_lock(fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return
+
+    import msvcrt  # type: ignore[import-not-found]  # pragma: no cover
+
+    os.lseek(fd, 0, os.SEEK_SET)
+    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
 def normalize_destination(destination: str) -> str:
@@ -149,7 +179,7 @@ class TransferPostprocessor:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _acquire_lock(fd)
         except BlockingIOError as exc:
             os.close(fd)
             raise RuntimeError("transfer state is locked") from exc
@@ -370,7 +400,7 @@ class TransferPostprocessor:
             )
         finally:
             if lock_fd is not None:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                _release_lock(lock_fd)
                 os.close(lock_fd)
 
     def process_legacy(self, run_result, **kwargs):
