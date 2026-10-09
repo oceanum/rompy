@@ -100,6 +100,11 @@ def test_noop_postprocessor_discovers_files_without_config(tmp_path):
     check_dir.mkdir(parents=True, exist_ok=True)
     (check_dir / "output1.txt").write_text("test content 1")
     (check_dir / "output2.nc").write_text("test content 2")
+    for name in ("generate_result.json", "run_result.json", "postprocess_result.json"):
+        (check_dir / name).write_text("{}")
+    state_dir = check_dir / ".rompy-postprocess" / "transfer"
+    state_dir.mkdir(parents=True)
+    (state_dir / "transfer-state.json").write_text("{}")
 
     processor = NoopPostprocessor(NoopPostprocessorConfig())
     now = datetime.now(timezone.utc)

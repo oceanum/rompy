@@ -13,6 +13,7 @@ from datetime import datetime
 from rompy.backends import LocalConfig
 from rompy.core.time import TimeRange
 from rompy.model import ModelRun
+from rompy.postprocess.config import NoopPostprocessorConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +45,9 @@ def main():
 
     # Postprocess the results (no-op by default)
     logger.info("Running postprocessing...")
-    results = model.postprocess(processor="noop")
+    results = model.postprocess(
+        processor=NoopPostprocessorConfig(), processor_input=success
+    )
     logger.info(f"Postprocessing results: {results}")
 
 

@@ -274,7 +274,6 @@ def test_stale_transfer_lock_is_reclaimed(tmp_path):
     assert acquired.read_text() != "2147483647\n"
     fcntl.flock(lock_fd, fcntl.LOCK_UN)
     os.close(lock_fd)
-    acquired.unlink()
 
 
 def test_successful_pairs_replay_from_disk_after_partial_failure(monkeypatch, tmp_path):

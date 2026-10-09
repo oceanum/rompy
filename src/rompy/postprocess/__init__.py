@@ -12,6 +12,11 @@ from typing import Optional, Union
 
 from pydantic import TypeAdapter
 
+from rompy.core.result_persistence import (
+    GENERATE_RESULT_FILENAME,
+    POSTPROCESS_RESULT_FILENAME,
+    RUN_RESULT_FILENAME,
+)
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
@@ -191,6 +196,11 @@ class NoopPostprocessor:
                         ),
                     )
 
+                reserved_sidecars = {
+                    GENERATE_RESULT_FILENAME,
+                    RUN_RESULT_FILENAME,
+                    POSTPROCESS_RESULT_FILENAME,
+                }
                 discovered_files = sorted(check_dir.rglob("*"), key=lambda f: str(f))
 
                 ext_map = {
@@ -213,6 +223,8 @@ class NoopPostprocessor:
                     )
                     for f in discovered_files
                     if f.is_file()
+                    and f.name not in reserved_sidecars
+                    and ".rompy-postprocess" not in f.relative_to(check_dir).parts
                 ]
                 file_count = len(artifacts)
                 logger.info(f"Found {file_count} output files in {check_dir}")

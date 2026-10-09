@@ -21,6 +21,7 @@ from rompy.core.time import TimeRange
 
 # ROMPY imports
 from rompy.model import ModelRun
+from rompy.postprocess.config import NoopPostprocessorConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -373,7 +374,9 @@ def example_postprocessing():
             if success:
                 # Run postprocessing
                 logger.info("Step 2: Running postprocessing...")
-                results = model.postprocess(processor="noop")
+                results = model.postprocess(
+                    processor=NoopPostprocessorConfig(), processor_input=success
+                )
                 logger.info(f"✅ Postprocessing completed: {results}")
                 logger.info(
                     "Key concepts: complete workflow, model.run() + model.postprocess()"

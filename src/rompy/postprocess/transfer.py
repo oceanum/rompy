@@ -190,10 +190,9 @@ class TransferPostprocessor:
     def process(self, context: PostprocessContext):
         start = datetime.now(timezone.utc)
         destinations = tuple(str(item) for item in self.config.destinations)
-        lock = None
         lock_fd = None
         try:
-            lock, state_path, lock_fd = self._lock(context)
+            _, state_path, lock_fd = self._lock(context)
             replay_state = self._load_state(state_path)
             # Disk state is the authority for a fresh process.  In-process
             # retries use this processor's redacted updates; arbitrary caller
@@ -373,11 +372,6 @@ class TransferPostprocessor:
             if lock_fd is not None:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 os.close(lock_fd)
-            if lock is not None:
-                try:
-                    lock.unlink()
-                except FileNotFoundError:
-                    pass
 
     def process_legacy(self, run_result, **kwargs):
         """Explicit adapter for standalone ``ModelRun.postprocess`` calls."""
