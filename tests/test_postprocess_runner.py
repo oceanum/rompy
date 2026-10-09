@@ -259,6 +259,20 @@ def test_transfer_failure_redacts_decoded_query_and_fragment(monkeypatch, tmp_pa
     )
 
 
+def test_stale_transfer_lock_is_reclaimed(tmp_path):
+    config = TransferPostprocessorConfig(destinations=["file:///tmp/destination"])
+    processor = TransferPostprocessor(config)
+    context = PostprocessContext.from_run_result(_run(tmp_path), staging_dir=tmp_path)
+    _, lock_path, _ = processor._state_paths(context)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("2147483647\n")
+
+    acquired, _ = processor._lock(context)
+    assert acquired == lock_path
+    assert acquired.read_text() != "2147483647\n"
+    acquired.unlink()
+
+
 def test_successful_pairs_replay_from_disk_after_partial_failure(monkeypatch, tmp_path):
     import rompy.postprocess.transfer as transfer_module
 

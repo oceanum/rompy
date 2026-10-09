@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -92,6 +93,21 @@ def test_generate_persistence_failure_emits_one_current_json_document(tmp_path):
     assert documents[0]["success"] is False
     assert documents[0]["run_id"] == "cli-run"
     assert documents[0]["payload"]["persistence_diagnostic"]["error"] == "disk full"
+
+
+def test_run_rejects_failed_generate_result_sidecar(tmp_path):
+    source = Path(__file__).parent / "fixtures/return_schema_v2/generate_failure.json"
+    sidecar = tmp_path / "generate_result.json"
+    sidecar.write_text(source.read_text())
+
+    with patch("rompy.cli.ModelRun") as model_class:
+        response = CliRunner().invoke(
+            cli, ["run", "--generate-result", str(sidecar)]
+        )
+
+    assert response.exit_code == 1
+    assert "template rendering failed" in response.output
+    model_class.return_value.run.assert_not_called()
 
 
 def test_run_persistence_failure_does_not_emit_stale_success_sidecar(tmp_path):

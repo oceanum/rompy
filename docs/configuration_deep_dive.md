@@ -174,6 +174,9 @@ Postprocessors use Pydantic-based configuration classes for type-safe, validated
 
 ### Basic Postprocessor Configuration
 
+`ModelRun.postprocess` consumes the typed result returned by the run stage. Pass
+that value as `processor_input`; it is not inferred from the model configuration.
+
 ```python
 from rompy.postprocess.config import NoopPostprocessorConfig
 
@@ -184,8 +187,8 @@ config = NoopPostprocessorConfig(
     env_vars={"DEBUG": "1"}
 )
 
-# Use with model
-results = model_run.postprocess(processor=config)
+# Use with model and the typed result from the run stage
+results = model_run.postprocess(processor=config, processor_input=run_result)
 ```
 
 ### Loading from Files
@@ -196,8 +199,8 @@ from rompy.postprocess.config import _load_processor_config
 # Load from YAML file
 config = _load_processor_config("processor.yml")
 
-# Use loaded configuration
-results = model_run.postprocess(processor=config)
+# Use loaded configuration with the typed run result
+results = model_run.postprocess(processor=config, processor_input=run_result)
 ```
 
 ### Configuration Validation

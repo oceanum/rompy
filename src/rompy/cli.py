@@ -385,6 +385,11 @@ def run(
                     f"Generate result sidecar not found: {generate_result_path}"
                 )
 
+            if not generate_result.success:
+                raise click.ClickException(
+                    generate_result.error or "Input generation failed"
+                )
+
             # v1 sidecar upgrade check
             if generate_result.normalized_context is None:
                 raise ValueError(

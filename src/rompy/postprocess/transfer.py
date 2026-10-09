@@ -146,12 +146,30 @@ class TransferPostprocessor:
         root, path, state_path = self._state_paths(context)
         root.mkdir(parents=True, exist_ok=True)
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
-            raise RuntimeError("transfer state is locked") from exc
-        os.close(fd)
-        return path, state_path
+        while True:
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError as exc:
+                try:
+                    owner_pid = int(path.read_text().strip())
+                except (OSError, ValueError):
+                    raise RuntimeError("transfer state is locked") from exc
+                try:
+                    os.kill(owner_pid, 0)
+                except ProcessLookupError:
+                    try:
+                        path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    continue
+                except PermissionError:
+                    raise RuntimeError("transfer state is locked") from exc
+                raise RuntimeError("transfer state is locked") from exc
+            try:
+                os.write(fd, f"{os.getpid()}\n".encode())
+            finally:
+                os.close(fd)
+            return path, state_path
 
     @staticmethod
     def _load_state(path: Path) -> dict[str, dict[str, Any]]:

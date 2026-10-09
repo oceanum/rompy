@@ -782,6 +782,7 @@ class ModelRun(RompyBaseModel):
 
         Args:
             processor: Configuration object for the postprocessor to use
+            processor_input: Typed ModelRunSuccess or ModelRunFailure from the run stage
             **kwargs: Additional processor-specific parameters (override config values)
 
         Returns:
@@ -800,8 +801,10 @@ class ModelRun(RompyBaseModel):
 
                 from rompy.postprocess.config import NoopPostprocessorConfig
 
-                # Run postprocessing
-                result = model.postprocess(NoopPostprocessorConfig())
+                # Run postprocessing with the typed result from the run stage
+                result = model.postprocess(
+                    NoopPostprocessorConfig(), processor_input=run_result
+                )
 
                 # Type-safe result handling with discriminated union
                 if result.success:

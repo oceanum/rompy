@@ -100,7 +100,7 @@ custom = "mypackage.backends:CustomRunBackend"
 
 ## Postprocessors
 
-Postprocessors handle analysis and transformation of model outputs. They implement a `process()` method that returns a dictionary with results.
+Postprocessors handle analysis and transformation of model outputs. They implement a `process()` method that returns a typed result. `ModelRun.postprocess` requires the typed `ModelRunSuccess` or `ModelRunFailure` from the run stage as `processor_input`.
 
 ### Built-in Postprocessors
 
@@ -109,14 +109,17 @@ Postprocessors handle analysis and transformation of model outputs. They impleme
 The `noop` processor provides basic validation without processing:
 
 ```python
+from rompy.postprocess.config import NoopPostprocessorConfig
+
 # Basic validation
-results = model.postprocess(processor="noop")
+results = model.postprocess(
+    processor=NoopPostprocessorConfig(), processor_input=run_result
+)
 
 # With custom validation
 results = model.postprocess(
-    processor="noop",
-    validate_outputs=True,
-    output_dir="./custom_output"
+    processor=NoopPostprocessorConfig(validate_outputs=True),
+    processor_input=run_result,
 )
 ```
 
