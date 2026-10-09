@@ -181,6 +181,7 @@ class PostprocessContext:
         run_result: ModelRunResultValue,
         *,
         staging_dir: Path | str | None = None,
+        output_dir: Path | str | None = None,
         failure_policy: PostprocessFailurePolicy = PostprocessFailurePolicy.FAIL_FAST,
         operational_state: OperationalState | None = None,
     ) -> PostprocessContext:
@@ -193,7 +194,11 @@ class PostprocessContext:
         result = TypeAdapter(ModelRunResult).validate_python(run_result)
         return cls(
             run_result=result,
-            output_dir=Path(result.output_dir) if result.output_dir else None,
+            output_dir=(
+                Path(output_dir)
+                if output_dir is not None
+                else (Path(result.output_dir) if result.output_dir else None)
+            ),
             staging_dir=Path(staging_dir)
             if staging_dir is not None
             else (Path(result.workspace_dir) if result.workspace_dir else None),

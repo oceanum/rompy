@@ -38,12 +38,12 @@ ROMPY now supports Pydantic-based postprocessor configuration via YAML/JSON file
 ### Postprocess with a config file
 
 ```bash
-rompy postprocess model_config.yml --processor-config processor.yml
+rompy postprocess simulations/run-001 --processor-config processor.yml
 ```
 
 `rompy run` writes `run_result.json` into the staging directory, and
-`rompy postprocess` consumes that sidecar by default. Use `--run-result PATH`
-to override the discovered sidecar explicitly.
+`rompy postprocess` consumes that sidecar by default. Pass either the staging
+directory or a direct `run_result.json` path as the positional argument.
 
 ### Pipeline with postprocessor config
 

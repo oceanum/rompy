@@ -281,6 +281,7 @@ def test_transfer_legacy_adapter_ignores_modelrun_options(monkeypatch, tmp_path)
 
     assert result == "ok"
     assert observed["context"].staging_dir == tmp_path
+    assert observed["context"].output_dir == tmp_path
 
 
 def test_stale_transfer_lock_is_reclaimed(tmp_path):
