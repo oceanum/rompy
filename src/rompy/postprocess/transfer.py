@@ -405,7 +405,10 @@ class TransferPostprocessor:
 
     def process_legacy(self, run_result, **kwargs):
         """Explicit adapter for standalone ``ModelRun.postprocess`` calls."""
-        context = PostprocessContext.from_run_result(run_result, **kwargs)
+        staging_dir = kwargs.get("staging_dir")
+        context = PostprocessContext.from_run_result(
+            run_result, staging_dir=staging_dir
+        )
         return self.process(context)
 
 

@@ -261,6 +261,28 @@ def test_transfer_failure_redacts_decoded_query_and_fragment(monkeypatch, tmp_pa
     )
 
 
+def test_transfer_legacy_adapter_ignores_modelrun_options(monkeypatch, tmp_path):
+    processor = TransferPostprocessor(
+        TransferPostprocessorConfig(destinations=["file:///tmp/destination"])
+    )
+    observed = {}
+
+    def capture(context):
+        observed["context"] = context
+        return "ok"
+
+    monkeypatch.setattr(processor, "process", capture)
+    result = processor.process_legacy(
+        _run(tmp_path),
+        staging_dir=tmp_path,
+        output_dir=tmp_path,
+        validate_outputs=True,
+    )
+
+    assert result == "ok"
+    assert observed["context"].staging_dir == tmp_path
+
+
 def test_stale_transfer_lock_is_reclaimed(tmp_path):
     config = TransferPostprocessorConfig(destinations=["file:///tmp/destination"])
     processor = TransferPostprocessor(config)

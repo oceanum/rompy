@@ -172,6 +172,20 @@ class NoopPostprocessor:
 
         logger.info(f"Starting no-op postprocessing for run_id: {model_run.run_id}")
 
+        if isinstance(model_run, ModelRunFailure):
+            return PostprocessFailure(
+                run_id=model_run.run_id,
+                error=model_run.error,
+                output_dir=model_run.output_dir,
+                message="Model run failed; postprocessing skipped",
+                artifacts=list(model_run.artifacts),
+                expected_outputs=list(model_run.expected_outputs),
+                missing_outputs=list(model_run.missing_outputs),
+                timing=TimingInfo(
+                    start_time=start_time, end_time=datetime.now(timezone.utc)
+                ),
+            )
+
         try:
             # Determine output directory
             if output_dir:
@@ -266,7 +280,7 @@ class NoopPostprocessor:
                 )
 
         except Exception as e:
-            logger.exception(f"Error in no-op postprocessor: {e}")
+            logger.exception("Error in no-op postprocessor")
             return PostprocessFailure(
                 run_id=getattr(model_run, "run_id", "unknown"),
                 error=_exception_message(e, "postprocessing failed"),

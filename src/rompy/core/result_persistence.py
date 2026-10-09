@@ -48,11 +48,15 @@ def _atomic_write(path: Path, data: bytes) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, str(path))
-        directory_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        # Directory fsync provides rename durability on POSIX. Windows does
+        # not support opening directories this way, but replace is durable
+        # enough for the platform's filesystem semantics here.
+        if os.name != "nt":
+            directory_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         if os.path.exists(temporary):
             try:

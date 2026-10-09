@@ -7,6 +7,7 @@ from rompy.core.config import BaseConfig
 from rompy.core.responses import (
     Artifact,
     ArtifactType,
+    ModelRunFailure,
     ModelRunSuccess,
     PostprocessFailure,
     PostprocessSuccess,
@@ -119,6 +120,26 @@ def test_noop_postprocessor_discovers_files_without_config(tmp_path):
     artifact_names = {Path(a.path).name for a in result.artifacts}
     assert artifact_names == {"output1.txt", "output2.nc"}
     assert all(a.size_bytes is not None for a in result.artifacts)
+
+
+def test_noop_postprocessor_preserves_model_run_failure(tmp_path):
+    now = datetime.now(timezone.utc)
+    failed = ModelRunFailure(
+        run_id="failed-run",
+        backend_used="local",
+        output_dir=str(tmp_path),
+        error="model execution failed",
+        artifacts=[],
+        expected_outputs=[],
+        missing_outputs=[],
+        timing=TimingInfo(start_time=now, end_time=now),
+    )
+
+    result = NoopPostprocessor(NoopPostprocessorConfig()).process(failed)
+
+    assert isinstance(result, PostprocessFailure)
+    assert not result.success
+    assert result.error == "model execution failed"
 
 
 def test_noop_postprocessor_rejects_duck_typed_model_run(tmp_path):
