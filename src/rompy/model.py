@@ -880,7 +880,9 @@ class ModelRun(RompyBaseModel):
             elif getattr(processor_instance, "input_protocol", None) == "context":
                 from rompy.postprocess.protocol import PostprocessContext
                 context = PostprocessContext.from_run_result(
-                    run_result, staging_dir=self.staging_dir
+                    run_result,
+                    staging_dir=self.staging_dir,
+                    output_dir=kwargs.get("output_dir"),
                 )
                 result = processor_instance.process(context, **process_options)
             else:

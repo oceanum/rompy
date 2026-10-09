@@ -267,16 +267,17 @@ from rompy.core.responses import (
     TimingInfo,
     Artifact,
     ArtifactType,
+    ModelRunSuccess,
 )
 
 class AnalysisPostprocessor:
     """Custom postprocessor for model analysis."""
 
-    def process(self, model_run, config: AnalysisPostprocessorConfig, **kwargs) -> PostprocessResult:
+    def process(self, run_result: ModelRunSuccess, config: AnalysisPostprocessorConfig, **kwargs) -> PostprocessResult:
         """Process model outputs with configuration.
 
         Args:
-            model_run: The ModelRun instance
+            run_result: The typed ModelRunSuccess from the run stage
             config: The AnalysisPostprocessorConfig instance
             **kwargs: Additional processor-specific parameters
 
@@ -286,7 +287,7 @@ class AnalysisPostprocessor:
         start_time = datetime.now(timezone.utc)
         
         try:
-            output_dir = Path(model_run.output_dir) / model_run.run_id
+            output_dir = Path(run_result.output_dir or ".")
 
             # Use configuration parameters
             metrics = self._calculate_metrics(
@@ -303,8 +304,8 @@ class AnalysisPostprocessor:
                 # Add plots as artifacts
                 for plot_file in plot_files:
                     artifacts.append(Artifact(
-                        path=plot_file,
-                        type=ArtifactType.PLOT,
+                        path=plot_file.relative_to(output_dir).as_posix(),
+                        artifact_type=ArtifactType.PLOT,
                         size_bytes=plot_file.stat().st_size if plot_file.exists() else 0,
                     ))
             
@@ -313,15 +314,19 @@ class AnalysisPostprocessor:
                 compressed_files = self._compress_outputs(output_dir)
                 for cf in compressed_files:
                     artifacts.append(Artifact(
-                        path=cf,
-                        type=ArtifactType.OTHER,
+                        path=cf.relative_to(output_dir).as_posix(),
+                        artifact_type=ArtifactType.OTHER,
                         size_bytes=cf.stat().st_size if cf.exists() else 0,
                     ))
 
             return PostprocessSuccess(
-                success=True,
+                run_id=run_result.run_id,
+                output_dir=str(output_dir),
+                validated=True,
                 artifacts=artifacts,
-                timing=TimingInfo(start=start_time, end=datetime.now(timezone.utc)),
+                expected_outputs=list(run_result.expected_outputs),
+                missing_outputs=list(run_result.missing_outputs),
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
                 metadata={
                     "metrics": metrics,
                     "compressed": config.compress,
@@ -330,9 +335,13 @@ class AnalysisPostprocessor:
 
         except Exception as e:
             return PostprocessFailure(
-                success=False,
+                run_id=run_result.run_id,
+                output_dir=str(output_dir),
                 error=str(e),
-                timing=TimingInfo(start=start_time, end=datetime.now(timezone.utc)),
+                artifacts=[],
+                expected_outputs=list(run_result.expected_outputs),
+                missing_outputs=list(run_result.missing_outputs),
+                timing=TimingInfo(start_time=start_time, end_time=datetime.now(timezone.utc)),
             )
 
     def _calculate_metrics(self, output_dir, metrics, output_format):
